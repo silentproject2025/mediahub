@@ -133,6 +133,11 @@ int msCurX=0, msCurY=0;
 bool msGameOver=false, msWin=false, msFirst=true;
 uint32_t msTimer=0, msBest=999;
 std::vector<MSNode> msQueue;
+std::vector<MSNode> snake;
+MSNode snakeFood;
+int8_t snakeDirX=1, snakeDirY=0, nextSnakeDirX=1, nextSnakeDirY=0;
+uint32_t snakeGameT = 0, snakeHi = 0;
+bool snakeGameOver = false;
 
 
 // GAME PROTOTYPES
@@ -144,6 +149,9 @@ void drawTank();
 void handleTank();
 void flappyInit();
 void drawFlappy();
+void snakeInit();
+void drawSnake();
+void handleSnake();
 void handleFlappy();
 void msInit(int w, int h);
 void drawMinesweeper();
@@ -377,7 +385,7 @@ enum AppState {
   ST_GAME_MENU, ST_TICTACTOE_MODE, ST_TICTACTOE, ST_TICTACTOE_OVER,
   ST_TANK_MODE, ST_TANK, ST_TANK_OVER,
   ST_FLAPPY_MODE, ST_FLAPPY, ST_FLAPPY_OVER,
-  ST_MINESWEEPER_SIZE, ST_MINESWEEPER, ST_MINESWEEPER_OVER
+  ST_MINESWEEPER_SIZE, ST_MINESWEEPER, ST_MINESWEEPER_OVER, ST_SNAKE_MODE, ST_SNAKE, ST_SNAKE_OVER
 };
 static AppState appState = ST_SPLASH;
 
@@ -838,8 +846,8 @@ static int      textScrollY=0;
 // ════════════════════════════════════════════════════════════════
 // GAMES GLOBAL
 static int gameMenuSel = 0;
-const char* gameList[] = {"TIC TAC TOE", "TANK BATTLE", "FLAPPY BIRD", "MINESWEEPER"};
-const char* gameSub[]  = {"Ultimate 5x5", "Grid Combat", "Classic Bird", "Grid Reveal"};
+const char* gameList[] = {"TIC TAC TOE", "TANK BATTLE", "FLAPPY BIRD", "MINESWEEPER", "SNAKE"};
+const char* gameSub[]  = {"Ultimate 5x5", "Grid Combat", "Classic Bird", "Grid Reveal", "Classic Slither"};
 
 
 static int menuSel = 0;
@@ -2568,7 +2576,7 @@ void loop() {
       mainBuf.setCursor((SCR_W-tw2)/2,SCR_H/2-5); mainBuf.print(msg);
       pushFrame(); ledSet(0,0,0); delay(300);
       _barPulseT = millis();
-      if(appState >= ST_GAME_MENU && appState <= ST_MINESWEEPER_OVER) { if(appState == ST_GAME_MENU) appState = ST_MENU; else appState = ST_GAME_MENU; } else appState = ST_MENU; textScrollY=0; if(appState==ST_MENU) drawMenu(); else if(appState==ST_GAME_MENU) drawGameMenu(); pushFrame(); btnFlushAll(); return;
+      if(appState >= ST_GAME_MENU && appState <= ST_SNAKE_OVER) { if(appState == ST_GAME_MENU) appState = ST_MENU; else appState = ST_GAME_MENU; } else appState = ST_MENU; textScrollY=0; if(appState==ST_MENU) drawMenu(); else if(appState==ST_GAME_MENU) drawGameMenu(); pushFrame(); btnFlushAll(); return;
     }
   }
 
@@ -2889,13 +2897,14 @@ void loop() {
       ledPulse(1500); break;
 
     case ST_GAME_MENU:
-      if(btnPressed(B_UP)){gameMenuSel=(gameMenuSel+3)%4; drawGameMenu(); pushFrame();}
-      if(btnPressed(B_DW)){gameMenuSel=(gameMenuSel+1)%4; drawGameMenu(); pushFrame();}
+      if(btnPressed(B_UP)){gameMenuSel=(gameMenuSel+4)%5; drawGameMenu(); pushFrame();}
+      if(btnPressed(B_DW)){gameMenuSel=(gameMenuSel+1)%5; drawGameMenu(); pushFrame();}
       if(btnPressed(B_SEL)){
         if(gameMenuSel==0) appState=ST_TICTACTOE_MODE;
         else if(gameMenuSel==1) appState=ST_TANK_MODE;
         else if(gameMenuSel==2) appState=ST_FLAPPY_MODE;
         else if(gameMenuSel==3) appState=ST_MINESWEEPER_SIZE;
+        else if(gameMenuSel==4) appState=ST_SNAKE_MODE;
         btnFlushAll();
       }
       drawGameMenu(); pushFrame(); break;
@@ -2926,22 +2935,29 @@ void loop() {
 
     case ST_TANK_OVER:
       drawTank(); pushFrame(); if(btnPressed(B_SEL)){ tankInit(); appState=ST_TANK; } break;
+
+    case ST_SNAKE_MODE:
+      snakeInit(); appState=ST_SNAKE; drawSnake(); pushFrame(); break;
+    case ST_SNAKE:
+      handleSnake(); break;
+    case ST_SNAKE_OVER:
+      drawSnake(); pushFrame(); if(btnPressed(B_SEL)){ snakeInit(); appState=ST_SNAKE; } break;
   }
 
   delay(4);
 }
 void drawGameMenu() {
-  mainBuf.fillScreen(C_BG); uiHeader("4 MINI GAMES");
-  const int ITEM_H = 32, GAP = 4;
-  for(int i=0; i<4; i++) {
+  mainBuf.fillScreen(C_BG); uiHeader("5 MINI GAMES");
+  const int ITEM_H = 24, GAP = 2;
+  for(int i=0; i<5; i++) {
     bool sel = (i == gameMenuSel);
-    int y = 32 + i * (ITEM_H + GAP);
-    uiCard(8, y, SCR_W-16, ITEM_H, sel ? C_WHITE : C_DGRAY, 8);
-    if(sel) mainBuf.fillRoundRect(8, y+4, 3, ITEM_H-8, 2, C_WHITE);
-    mainBuf.setFont(&fonts::Font4); mainBuf.setTextColor(sel ? C_WHITE : C_MGRAY);
+    int y = 30 + i * (ITEM_H + GAP);
+    uiCard(8, y, SCR_W-16, ITEM_H, sel ? C_WHITE : C_DGRAY, 6);
+    if(sel) mainBuf.fillRoundRect(8, y+3, 3, ITEM_H-6, 2, C_WHITE);
+    mainBuf.setFont(&fonts::Font2); mainBuf.setTextColor(sel ? C_WHITE : C_MGRAY);
     mainBuf.setCursor(20, y+4); mainBuf.print(gameList[i]);
     mainBuf.setFont(&fonts::Font2); mainBuf.setTextColor(sel ? C_LGRAY : C_DGRAY);
-    mainBuf.setCursor(SCR_W-mainBuf.textWidth(gameSub[i])-16, y+10); mainBuf.print(gameSub[i]);
+    mainBuf.setCursor(SCR_W-mainBuf.textWidth(gameSub[i])-16, y+4); mainBuf.print(gameSub[i]);
   }
   uiFooter("UP/DW:pilih  SEL:main  L+R:back");
 }
@@ -3543,5 +3559,103 @@ void handleMinesweeper() {
 
   if(changed || (millis()%500 < 50)) {
     drawMinesweeper(); pushFrame();
+  }
+}
+
+// SNAKE GAME
+void snakeInit() {
+  snake.clear();
+  snake.push_back({10, 5});
+  snake.push_back({9, 5});
+  snake.push_back({8, 5});
+  snakeDirX = 1; snakeDirY = 0;
+  nextSnakeDirX = 1; nextSnakeDirY = 0;
+  snakeGameOver = false;
+  snakeFood = { (int)random(1, 19), (int)random(2, 9) };
+  prefs.begin("games", true); snakeHi = prefs.getInt("snake_hi", 0); prefs.end();
+}
+
+void drawSnake() {
+  mainBuf.fillScreen(C_BG);
+  uiHeader("SNAKE");
+
+  const int T_SZ = 14;
+  const int OFF_Y = 25;
+  const int OFF_X = (SCR_W - 20 * T_SZ) / 2;
+
+  // Draw border
+  mainBuf.drawRect(OFF_X - 1, OFF_Y - 1, 20 * T_SZ + 2, 10 * T_SZ + 2, C_DGRAY);
+
+  // Draw Food
+  mainBuf.fillRoundRect(OFF_X + snakeFood.x * T_SZ + 2, OFF_Y + snakeFood.y * T_SZ + 2, T_SZ - 4, T_SZ - 4, 3, C_ACCENT_FUN);
+
+  // Draw Snake
+  for (size_t i = 0; i < snake.size(); i++) {
+    uint16_t col = (i == 0) ? C_WHITE : C_LGRAY;
+    mainBuf.fillRoundRect(OFF_X + snake[i].x * T_SZ + 1, OFF_Y + snake[i].y * T_SZ + 1, T_SZ - 2, T_SZ - 2, 2, col);
+  }
+
+  // Score
+  char buf[32];
+  snprintf(buf, sizeof(buf), "Score: %d  Hi: %d", (int)snake.size() - 3, (int)snakeHi);
+  uiFooter(buf);
+
+  if (snakeGameOver) {
+    mainBuf.fillRect(40, 60, 240, 50, C_SURFACE);
+    mainBuf.drawRect(40, 60, 240, 50, C_WHITE);
+    uiCenteredText("GAME OVER", 80, C_WHITE, &fonts::Font4);
+    if (snake.size() - 3 > snakeHi) {
+      snakeHi = snake.size() - 3;
+      prefs.begin("games", false); prefs.putInt("snake_hi", snakeHi); prefs.end();
+    }
+  }
+}
+
+void handleSnake() {
+  if (snakeGameOver) {
+    if (btnPressed(B_SEL)) { snakeInit(); drawSnake(); pushFrame(); }
+    return;
+  }
+
+  if (btnPressed(B_UP) && snakeDirY == 0) { nextSnakeDirX = 0; nextSnakeDirY = -1; }
+  if (btnPressed(B_DW) && snakeDirY == 0) { nextSnakeDirX = 0; nextSnakeDirY = 1; }
+  if (btnPressed(B_L) && snakeDirX == 0) { nextSnakeDirX = -1; nextSnakeDirY = 0; }
+  if (btnPressed(B_R) && snakeDirX == 0) { nextSnakeDirX = 1; nextSnakeDirY = 0; }
+
+  uint32_t now = millis();
+  int speed = max(50, 150 - (int)(snake.size() * 2));
+  if (now - snakeGameT < (uint32_t)speed) return;
+  snakeGameT = now;
+
+  snakeDirX = nextSnakeDirX;
+  snakeDirY = nextSnakeDirY;
+
+  MSNode head = snake[0];
+  head.x += snakeDirX;
+  head.y += snakeDirY;
+
+  // Collision with walls
+  if (head.x < 0 || head.x >= 20 || head.y < 0 || head.y >= 10) {
+    snakeGameOver = true; ledSet(255, 0, 0); ledPulse(300);
+  }
+
+  // Collision with self
+  for (auto& s : snake) {
+    if (head.x == s.x && head.y == s.y) {
+      snakeGameOver = true; ledSet(255, 0, 0); ledPulse(300);
+      break;
+    }
+  }
+
+  if (!snakeGameOver) {
+    snake.insert(snake.begin(), head);
+    if (head.x == snakeFood.x && head.y == snakeFood.y) {
+      snakeFood = { (int)random(0, 20), (int)random(0, 10) };
+      ledSet(0, 255, 0); ledPulse(100);
+    } else {
+      snake.pop_back();
+    }
+    drawSnake();
+    pushFrame();
   }
 }
