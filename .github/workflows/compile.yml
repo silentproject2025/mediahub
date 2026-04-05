@@ -15,7 +15,7 @@ jobs:
         uses: actions/checkout@v4
 
       - name: Setup Arduino CLI
-        uses: arduino/setup-arduino-cli@v1
+        uses: arduino/setup-arduino-cli@v2
 
       - name: Install ESP32 Core
         run: |
@@ -31,7 +31,7 @@ jobs:
 
       - name: Compile Sketch
         run: |
-          arduino-cli compile --fqbn esp32:esp32:esp32s3:FlashSize=16M,PSRAM=opi --output-dir ./build MediaHub/MediaHub.ino
+          arduino-cli compile --fqbn esp32:esp32:esp32s3:FlashSize=16M,PSRAM=opi,PartitionScheme=huge_app --output-dir ./build MediaHub/MediaHub.ino
 
       - name: Upload Binary
         uses: actions/upload-artifact@v4
