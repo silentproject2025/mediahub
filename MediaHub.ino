@@ -1,0 +1,2803 @@
+/**
+ * ╔══════════════════════════════════════════════════════════════╗
+ * ║   ESP32-S3 N16R8 — Media Hub  v9.1  (BUG FIX + FITUR BARU) ║
+ * ║                                                              ║
+ * ║   PERUBAHAN v9.1 vs v9.0:                                    ║
+ * ║                                                              ║
+ * ║   [FIX 1]  STOIC QUOTE                                       ║
+ * ║            Fix field name: coba "body" dulu, fallback "quote"║
+ * ║            Tambah fallback author dari "author.name"         ║
+ * ║                                                              ║
+ * ║   [FIX 2]  NUMBER FACT                                       ║
+ * ║            Ganti HTTPClient ke WiFiClient langsung untuk     ║
+ * ║            HTTP plain (non-HTTPS) ke numbersapi.com          ║
+ * ║                                                              ║
+ * ║   [FIX 3]  BORED API → RANDOM ACTIVITY API                   ║
+ * ║            API lama (boredapi.com) sudah mati                ║
+ * ║            Ganti ke www.randomactivityapi.com/api/activity   ║
+ * ║            Field sama: activity, type, participants          ║
+ * ║                                                              ║
+ * ║   [FIX 4]  HACKER NEWS — KOMENTAR                            ║
+ * ║            SEL pada story → buka layar komentar              ║
+ * ║            Ambil 3 komentar teratas via Algolia HN API       ║
+ * ║            api.hn.algolia.com/v1/items/{id}                  ║
+ * ║            Tampilkan author + teks komentar (strip HTML)     ║
+ * ║                                                              ║
+ * ║   [NEW 1]  WIFI PREFERENCES (NVS)                            ║
+ * ║            Simpan SSID + password ke NVS (Preferences)       ║
+ * ║            Auto-connect saat boot jika ada data tersimpan    ║
+ * ║            Hapus kredensial dari menu Settings               ║
+ * ║                                                              ║
+ * ║   [NEW 2]  WIFI RSSI 4-BAR                                   ║
+ * ║            Ganti dot jadi 4-bar sinyal di header & menu      ║
+ * ║            Bar bertingkat sesuai kekuatan sinyal             ║
+ * ║                                                              ║
+ * ║   [NOTE]   ISS & People in Space: tetap HTTPClient v9.0      ║
+ * ║   [SEMUA FITUR v9.0 lainnya dipertahankan]                   ║
+ * ╚══════════════════════════════════════════════════════════════╝
+ *
+ *   Libraries:
+ *   - LovyanGFX        by lovyan03
+ *   - ArduinoJson      by bblanchon
+ *   - Adafruit NeoPixel by Adafruit
+ *   - MjpegClass       by moononournation
+ *     copy MjpegClass.h ke folder sketch
+ *
+ *   Board  : ESP32S3 Dev Module
+ *   PSRAM  : OPI PSRAM (Octal) — WAJIB aktif
+ *   Flash  : 16 MB
+ */
+
+// ════════════════════════════════════════════════════════════════
+// INCLUDES
+// ════════════════════════════════════════════════════════════════
+#define LGFX_USE_V1
+#include <LovyanGFX.hpp>
+#include "MjpegClass.h"
+#include <SD.h>
+#include <SPI.h>
+#include <Wire.h>
+#include <WiFi.h>
+#include <WiFiClient.h>
+#include <WiFiClientSecure.h>
+#include <HTTPClient.h>
+#include <ArduinoJson.h>
+#include <Adafruit_NeoPixel.h>
+#include <Preferences.h>
+#include <esp_timer.h>
+#include <esp_heap_caps.h>
+#include <time.h>
+#include <vector>
+#include <algorithm>
+
+// ════════════════════════════════════════════════════════════════
+// COMPILE FIX: enum Btn harus sebelum fungsi apapun
+// ════════════════════════════════════════════════════════════════
+enum Btn { B_SEL=0, B_UP, B_DW, B_R, B_L };
+
+// ════════════════════════════════════════════════════════════════
+// PIN & LAYAR
+// ════════════════════════════════════════════════════════════════
+#define SCR_W   320
+#define SCR_H   170
+
+#define TFT_BL    14
+#define TFT_RST   13
+#define TFT_DC     9
+#define TFT_MOSI  11
+#define TFT_SCLK  12
+#define TFT_CS    10
+
+#define SD_CS      3
+#define SD_SCK    18
+#define SD_MISO    8
+#define SD_MOSI   17
+#define SD_SPI_SPEED  40000000L
+
+#define BTN_SEL    0
+#define BTN_UP    41
+#define BTN_DW    40
+#define BTN_R     38
+#define BTN_L     39
+
+#define NEO_PIN   48
+#define NEO_N      1
+
+#define LDR_PIN   1
+#define RTC_SDA   21
+#define RTC_SCL   47
+
+// ════════════════════════════════════════════════════════════════
+// WARNA
+// ════════════════════════════════════════════════════════════════
+static uint16_t C_BLACK, C_WHITE, C_LGRAY, C_MGRAY, C_DGRAY,
+                C_XDGRAY, C_XXDGRAY;
+static uint16_t C_BG, C_SURFACE, C_CARD, C_BORDER,
+                C_TEXT_DIM, C_TEXT_MUTE, C_TEXT_DEAD;
+static uint16_t C_ACCENT_SPACE, C_ACCENT_FUN, C_ACCENT_INFO,
+                C_ACCENT_MEDIA, C_ACCENT_SYS;
+
+void initColors() {
+  C_BLACK   = 0x0000u;
+  C_WHITE   = 0xFFFFu;
+  C_LGRAY   = lgfx::color565(198,198,198);
+  C_MGRAY   = lgfx::color565(130,130,130);
+  C_DGRAY   = lgfx::color565(65,65,65);
+  C_XDGRAY  = lgfx::color565(32,32,32);
+  C_XXDGRAY = lgfx::color565(16,16,16);
+
+  C_BG        = C_BLACK;
+  C_SURFACE   = C_XDGRAY;
+  C_CARD      = C_DGRAY;
+  C_BORDER    = C_MGRAY;
+  C_TEXT_DIM  = C_LGRAY;
+  C_TEXT_MUTE = C_MGRAY;
+  C_TEXT_DEAD = C_DGRAY;
+
+  C_ACCENT_SPACE = lgfx::color565(80,80,95);
+  C_ACCENT_FUN   = lgfx::color565(90,75,55);
+  C_ACCENT_INFO  = lgfx::color565(55,80,65);
+  C_ACCENT_MEDIA = lgfx::color565(75,55,75);
+  C_ACCENT_SYS   = lgfx::color565(55,55,80);
+}
+
+// ════════════════════════════════════════════════════════════════
+// VIDEO CONFIG
+// ════════════════════════════════════════════════════════════════
+#define VIDEO_FPS        25
+#define FRAME_US         (1000000L / VIDEO_FPS)
+#define OUTPUT_BUF_LINES  4
+#define MJPEG_BUF_SIZE   (150 * 1024)
+
+// ════════════════════════════════════════════════════════════════
+// NTP CONFIG
+// ════════════════════════════════════════════════════════════════
+#define NTP_SERVER1           "pool.ntp.org"
+#define NTP_SERVER2           "time.google.com"
+#define NTP_TIMEZONE          "WIB-7"
+#define NTP_SYNC_INTERVAL_MS  3600000UL
+
+// ════════════════════════════════════════════════════════════════
+// AUTO BRIGHTNESS CONFIG
+// ════════════════════════════════════════════════════════════════
+#define LDR_SAMPLES       8
+#define LDR_UPDATE_MS   200
+#define BR_MIN           30
+#define BR_MAX          255
+#define BR_SMOOTH_STEP    3
+
+// ════════════════════════════════════════════════════════════════
+// RSS CONFIG
+// ════════════════════════════════════════════════════════════════
+#define RSS_REFRESH_MIN    5
+#define RSS_HEADLINE_MAX  20
+#define RSS_TICKER_SPEED  80
+#define RSS_FETCH_TIMEOUT 10000
+
+struct RssFeed { const char* name; const char* url; };
+static const RssFeed RSS_FEEDS[] = {
+  { "CNN ID",    "https://www.cnnindonesia.com/rss/feed.rss" },
+  { "Detik",     "https://rss.detik.com/index.php/detikcom"  },
+  { "Republika", "https://rss.republika.co.id/rss/all"       },
+};
+#define RSS_FEED_COUNT  3
+
+// ════════════════════════════════════════════════════════════════
+// MOOD LAMP CONFIG
+// ════════════════════════════════════════════════════════════════
+#define MOOD_SAMPLE_COUNT   64
+#define MOOD_SMOOTH_FACTOR  0.08f
+#define MOOD_LED_MAX_BR     180
+#define MOOD_FADE_STEP_MS   20
+#define MOOD_MIN_V          12
+
+// ════════════════════════════════════════════════════════════════
+// NVS PREFERENCES KEY
+// ════════════════════════════════════════════════════════════════
+#define NVS_NS        "mediahub"
+#define NVS_KEY_SSID  "wifi_ssid"
+#define NVS_KEY_PASS  "wifi_pass"
+
+// ════════════════════════════════════════════════════════════════
+// LGFX
+// ════════════════════════════════════════════════════════════════
+class LGFX : public lgfx::LGFX_Device {
+  lgfx::Panel_ST7789  _panel;
+  lgfx::Bus_SPI       _bus;
+  lgfx::Light_PWM     _light;
+public:
+  LGFX() {
+    {
+      auto c = _bus.config();
+      c.spi_host    = SPI2_HOST;
+      c.spi_mode    = 3;
+      c.freq_write  = 80000000;
+      c.freq_read   = 16000000;
+      c.spi_3wire   = true;
+      c.use_lock    = true;
+      c.dma_channel = SPI_DMA_CH_AUTO;
+      c.pin_sclk    = TFT_SCLK;
+      c.pin_mosi    = TFT_MOSI;
+      c.pin_miso    = -1;
+      c.pin_dc      = TFT_DC;
+      _bus.config(c);
+      _panel.setBus(&_bus);
+    }
+    {
+      auto c = _panel.config();
+      c.pin_cs          = TFT_CS;
+      c.pin_rst         = TFT_RST;
+      c.pin_busy        = -1;
+      c.panel_width     = 170;
+      c.panel_height    = 320;
+      c.offset_x        = 35;
+      c.offset_y        = 0;
+      c.offset_rotation = 0;
+      c.invert          = true;
+      c.rgb_order       = false;
+      c.dlen_16bit      = false;
+      c.bus_shared      = false;
+      _panel.config(c);
+    }
+    {
+      auto c = _light.config();
+      c.pin_bl      = TFT_BL;
+      c.invert      = false;
+      c.freq        = 44100;
+      c.pwm_channel = 7;
+      _light.config(c);
+      _panel.setLight(&_light);
+    }
+    setPanel(&_panel);
+  }
+};
+
+// ════════════════════════════════════════════════════════════════
+// GLOBALS
+// ════════════════════════════════════════════════════════════════
+static LGFX              tft;
+static LGFX_Sprite       mainBuf(&tft);
+static Adafruit_NeoPixel neo(NEO_N, NEO_PIN, NEO_GRB + NEO_KHZ800);
+static SPIClass          sdSPI(HSPI);
+static MjpegClass        mjpeg;
+static Preferences       prefs;
+
+static uint8_t  *mjpeg_buf  = nullptr;
+static uint16_t *output_buf = nullptr;
+
+// ════════════════════════════════════════════════════════════════
+// TOMBOL
+// ════════════════════════════════════════════════════════════════
+static const uint8_t btnPins[] = {BTN_SEL, BTN_UP, BTN_DW, BTN_R, BTN_L};
+static uint32_t btnLast[5] = {0};
+static bool     btnPrev[5] = {false};
+static uint32_t comboLTime = 0, comboRTime = 0;
+static bool     comboFired = false;
+static uint32_t lastStatsUpdate = 0;
+
+// ════════════════════════════════════════════════════════════════
+// APP STATE
+// ════════════════════════════════════════════════════════════════
+enum AppState {
+  ST_SPLASH, ST_MENU,
+  ST_WIFI_SCAN, ST_WIFI_PASS, ST_WIFI_CONN,
+  ST_VIDEO_LIST, ST_VIDEO_PLAY,
+  ST_TRIVIA_SETUP, ST_TRIVIA_LOAD, ST_TRIVIA_Q,
+  ST_TRIVIA_RESULT, ST_TRIVIA_SUMMARY,
+  ST_SETTINGS,
+  ST_POWER_MENU,
+  ST_FILE_MGR,
+  ST_RSS_READER,
+  ST_ISS_TRACKER,
+  ST_APOD,
+  ST_STOIC,
+  ST_NUMBER_FACT,
+  ST_JOKES,
+  ST_BORED,
+  ST_PEOPLE_SPACE,
+  ST_HACKER_NEWS,
+  ST_HN_COMMENTS    // [NEW v9.1] Layar komentar HN
+};
+static AppState appState = ST_SPLASH;
+
+// ════════════════════════════════════════════════════════════════
+// CLOCK / NTP STATE
+// ════════════════════════════════════════════════════════════════
+static bool     clockSynced     = false;
+static uint32_t lastNtpSync     = 0;
+static uint32_t lastClockUpdate = 0;
+
+struct ClockTime {
+  int  hour, min, sec;
+  int  day, month, year, dow;
+  bool valid;
+};
+static ClockTime gClock = {0,0,0,1,1,2024,0,false};
+
+const char* DOW_ID[]    = {"Min","Sen","Sel","Rab","Kam","Jum","Sab"};
+const char* MON_SHORT[] = {"Jan","Feb","Mar","Apr","Mei","Jun","Jul","Agu","Sep","Okt","Nov","Des"};
+
+void clockUpdate() {
+  uint32_t now = millis();
+  if (now - lastClockUpdate < 500) return;
+  lastClockUpdate = now;
+  struct tm ti;
+  if (getLocalTime(&ti, 0)) {
+    gClock = {ti.tm_hour,ti.tm_min,ti.tm_sec,ti.tm_mday,ti.tm_mon+1,ti.tm_year+1900,ti.tm_wday,true};
+  }
+}
+
+void clockSyncNTP() {
+  if (!WiFi.isConnected()) return;
+  configTime(7*3600, 0, NTP_SERVER1, NTP_SERVER2);
+  struct tm ti;
+  uint32_t t = millis();
+  while (!getLocalTime(&ti,0) && millis()-t < 5000) delay(100);
+  if (getLocalTime(&ti,0)) { clockSynced=true; lastNtpSync=millis(); }
+}
+
+void clockFormatTime(char* buf, int len) {
+  snprintf(buf, len, "%02d:%02d:%02d", gClock.hour, gClock.min, gClock.sec);
+}
+void clockFormatDate(char* buf, int len) {
+  if (!gClock.valid) { snprintf(buf, len, "--/--/----"); return; }
+  snprintf(buf, len, "%s, %d %s %d",
+    DOW_ID[gClock.dow%7], gClock.day, MON_SHORT[(gClock.month-1)%12], gClock.year);
+}
+
+// ════════════════════════════════════════════════════════════════
+// AUTO BRIGHTNESS
+// ════════════════════════════════════════════════════════════════
+static bool     autoBrEnabled    = false;
+static uint32_t lastLdrUpdate    = 0;
+static int      ldrBuf[LDR_SAMPLES] = {0};
+static int      ldrBufIdx        = 0;
+static int      brightness       = 200;
+static int      brightnessTarget = 200;
+
+void autoBrInit() {
+  pinMode(LDR_PIN, INPUT);
+  for (int i=0; i<LDR_SAMPLES; i++) { ldrBuf[i]=analogRead(LDR_PIN); delay(2); }
+}
+
+void autoBrUpdate() {
+  if (!autoBrEnabled) return;
+  uint32_t now = millis();
+  if (now-lastLdrUpdate < LDR_UPDATE_MS) return;
+  lastLdrUpdate = now;
+  ldrBuf[ldrBufIdx] = analogRead(LDR_PIN);
+  ldrBufIdx = (ldrBufIdx+1) % LDR_SAMPLES;
+  int vals[LDR_SAMPLES]; memcpy(vals, ldrBuf, sizeof(ldrBuf));
+  std::sort(vals, vals+LDR_SAMPLES);
+  long sum=0; for(int i=1;i<LDR_SAMPLES-1;i++) sum+=vals[i];
+  int avg = (int)(sum/(LDR_SAMPLES-2));
+  brightnessTarget = constrain(map(avg,0,4095,BR_MIN,BR_MAX), BR_MIN, BR_MAX);
+  if (abs(brightness-brightnessTarget)>BR_SMOOTH_STEP)
+    brightness += (brightness<brightnessTarget) ? BR_SMOOTH_STEP : -BR_SMOOTH_STEP;
+  else brightness = brightnessTarget;
+  tft.setBrightness(brightness);
+}
+
+// ════════════════════════════════════════════════════════════════
+// WIFI PREFERENCES (NVS) — [NEW v9.1]
+// ════════════════════════════════════════════════════════════════
+static char savedSSID[64] = {0};
+static char savedPass[64] = {0};
+
+void wifiPrefsLoad() {
+  prefs.begin(NVS_NS, true);
+  String s = prefs.getString(NVS_KEY_SSID, "");
+  String p = prefs.getString(NVS_KEY_PASS, "");
+  prefs.end();
+  s.toCharArray(savedSSID, sizeof(savedSSID));
+  p.toCharArray(savedPass, sizeof(savedPass));
+}
+
+void wifiPrefsSave(const char* ssid, const char* pass) {
+  prefs.begin(NVS_NS, false);
+  prefs.putString(NVS_KEY_SSID, ssid);
+  prefs.putString(NVS_KEY_PASS, pass);
+  prefs.end();
+  strncpy(savedSSID, ssid, sizeof(savedSSID)-1);
+  strncpy(savedPass, pass, sizeof(savedPass)-1);
+}
+
+void wifiPrefsClear() {
+  prefs.begin(NVS_NS, false);
+  prefs.remove(NVS_KEY_SSID);
+  prefs.remove(NVS_KEY_PASS);
+  prefs.end();
+  memset(savedSSID, 0, sizeof(savedSSID));
+  memset(savedPass, 0, sizeof(savedPass));
+}
+
+// ════════════════════════════════════════════════════════════════
+// RSS STATE
+// ════════════════════════════════════════════════════════════════
+struct RssHeadline { String title, source, link; };
+static std::vector<RssHeadline> rssHeadlines;
+static bool     rssFetching   = false;
+static bool     rssFetched    = false;
+static uint32_t rssLastFetch  = 0;
+static int      rssTickerX    = 0;
+static uint32_t rssTickerLast = 0;
+static String   rssTickerStr  = "";
+static int      rssTickerW    = 0;
+static int      rssViewSel    = 0;
+static int      rssScrollOff  = 0;
+
+String htmlDecode(const String& s) {
+  String o = s;
+  o.replace("&amp;","&");   o.replace("&lt;","<");   o.replace("&gt;",">");
+  o.replace("&quot;","\""); o.replace("&#039;","'");  o.replace("&apos;","'");
+  o.replace("&ldquo;","\"");o.replace("&rdquo;","\"");
+  o.replace("&lsquo;","'"); o.replace("&rsquo;","'");
+  o.replace("&ndash;","-"); o.replace("&mdash;","--");
+  o.replace("&hellip;","...");o.replace("&nbsp;"," ");
+  o.replace("&#8211;","-"); o.replace("&#8212;","--");
+  o.replace("&#8216;","'"); o.replace("&#8217;","'");
+  o.replace("&#8220;","\"");o.replace("&#8221;","\"");
+  return o;
+}
+
+// Strip HTML tags sederhana (untuk komentar HN)
+String stripHtml(const String& s) {
+  String out = "";
+  bool inTag = false;
+  for (int i = 0; i < (int)s.length(); i++) {
+    char c = s[i];
+    if (c == '<') { inTag = true; continue; }
+    if (c == '>') { inTag = false; out += ' '; continue; }
+    if (!inTag) out += c;
+  }
+  return htmlDecode(out);
+}
+
+String xmlExtract(const String& xml, const String& tag) {
+  String openTag = "<"+tag+">", closeTag = "</"+tag+">";
+  int start = xml.indexOf(openTag);
+  if (start<0) {
+    openTag = "<"+tag+" "; start = xml.indexOf(openTag);
+    if (start<0) return "";
+    start = xml.indexOf('>',start)+1;
+  } else start += openTag.length();
+  int end = xml.indexOf(closeTag, start);
+  if (end<0) return "";
+  String result = xml.substring(start,end);
+  if (result.startsWith("<![CDATA[") && result.endsWith("]]>"))
+    result = result.substring(9, result.length()-3);
+  result.trim();
+  return htmlDecode(result);
+}
+
+bool rssFetchFeed(int feedIdx) {
+  if (!WiFi.isConnected() || feedIdx<0 || feedIdx>=RSS_FEED_COUNT) return false;
+  HTTPClient http;
+  http.begin(RSS_FEEDS[feedIdx].url);
+  http.setTimeout(RSS_FETCH_TIMEOUT);
+  http.addHeader("User-Agent","ESP32-MediaHub/9.1");
+  http.addHeader("Accept","application/rss+xml,application/xml,text/xml");
+  int code = http.GET();
+  if (code!=200) { http.end(); return false; }
+  WiFiClient* stream = http.getStreamPtr();
+  String xml=""; int len=http.getSize(); uint8_t chunk[512]; int bytesRead=0;
+  while (http.connected() && (len>0||len==-1)) {
+    int avail=stream->available();
+    if (avail>0) {
+      int toRead=min(avail,(int)sizeof(chunk));
+      int actual=stream->readBytes(chunk,toRead);
+      xml += String((char*)chunk).substring(0,actual);
+      bytesRead += actual; if(len>0) len-=actual;
+    }
+    if (bytesRead>32000) break;
+    delay(1);
+  }
+  http.end();
+  int itemStart=xml.indexOf("<item>"), added=0;
+  while (itemStart>=0 && added<5) {
+    int itemEnd=xml.indexOf("</item>",itemStart);
+    if (itemEnd<0) break;
+    String item=xml.substring(itemStart+6,itemEnd);
+    String title=xmlExtract(item,"title"), link=xmlExtract(item,"link");
+    if (link.isEmpty()) link=xmlExtract(item,"guid");
+    if (!title.isEmpty()) {
+      rssHeadlines.push_back({title,String(RSS_FEEDS[feedIdx].name),link});
+      while((int)rssHeadlines.size()>RSS_HEADLINE_MAX) rssHeadlines.erase(rssHeadlines.begin());
+      added++;
+    }
+    itemStart=xml.indexOf("<item>",itemEnd);
+  }
+  return added>0;
+}
+
+void rssRebuildTicker() {
+  rssTickerStr = "  ";
+  for (auto& h : rssHeadlines) rssTickerStr += "["+h.source+"] "+h.title+"   ";
+  mainBuf.setFont(&fonts::Font2);
+  rssTickerW = mainBuf.textWidth(rssTickerStr.c_str());
+  rssTickerX = 0;
+}
+
+void rssFetchAll() {
+  rssFetching=true; rssHeadlines.clear();
+  for (int i=0;i<RSS_FEED_COUNT;i++) { rssFetchFeed(i); delay(200); }
+  rssRebuildTicker();
+  rssFetched=true; rssFetching=false; rssLastFetch=millis();
+  rssViewSel=0; rssScrollOff=0;
+}
+
+void rssTickerUpdate() {
+  if (!rssFetched||rssHeadlines.empty()||rssTickerStr.isEmpty()) return;
+  uint32_t now=millis();
+  if (now-rssTickerLast<RSS_TICKER_SPEED) return;
+  rssTickerLast=now; rssTickerX-=1;
+  if (rssTickerX < -rssTickerW) rssTickerX=SCR_W;
+}
+
+bool rssNeedsRefresh() {
+  if (!rssFetched) return true;
+  return (millis()-rssLastFetch) > (uint32_t)(RSS_REFRESH_MIN*60000UL);
+}
+
+// ════════════════════════════════════════════════════════════════
+// FILE MANAGER STATE
+// ════════════════════════════════════════════════════════════════
+struct FsEntry { String name; bool isDir; size_t size; };
+static std::vector<FsEntry> fmEntries;
+static String   fmCurrentPath   = "/";
+static int      fmSel           = 0;
+static int      fmScrollOff     = 0;
+static bool     fmConfirmDelete = false;
+static int64_t  sdTotalBytes    = 0;
+static int64_t  sdUsedBytes     = 0;
+
+void fmScanDir(const String& path) {
+  fmEntries.clear(); fmSel=0; fmScrollOff=0; fmConfirmDelete=false;
+  if (path!="/") fmEntries.push_back({"..",true,0});
+  File dir=SD.open(path.c_str());
+  if (!dir||!dir.isDirectory()) return;
+  while(true) {
+    File f=dir.openNextFile(); if(!f) break;
+    String nm=String(f.name());
+    if (!nm.startsWith(".")) fmEntries.push_back({nm,f.isDirectory(),(size_t)f.size()});
+    f.close();
+  }
+  dir.close();
+  std::sort(fmEntries.begin(),fmEntries.end(),[](const FsEntry&a,const FsEntry&b){
+    if(a.name=="..") return true; if(b.name=="..") return false;
+    if(a.isDir!=b.isDir) return a.isDir>b.isDir; return a.name<b.name;
+  });
+  sdTotalBytes=SD.totalBytes(); sdUsedBytes=SD.usedBytes();
+}
+
+String fmFormatSize(size_t bytes) {
+  char buf[20];
+  if(bytes<1024) snprintf(buf,sizeof(buf),"%dB",(int)bytes);
+  else if(bytes<1048576) snprintf(buf,sizeof(buf),"%dKB",(int)(bytes/1024));
+  else if(bytes<1073741824) snprintf(buf,sizeof(buf),"%.1fMB",(float)bytes/1048576.0f);
+  else snprintf(buf,sizeof(buf),"%.2fGB",(float)bytes/1073741824.0f);
+  return String(buf);
+}
+
+bool fmDeletePath(const String& path) {
+  File f=SD.open(path.c_str()); if(!f) return false;
+  bool isDir=f.isDirectory(); f.close();
+  return isDir ? SD.rmdir(path.c_str()) : SD.remove(path.c_str());
+}
+
+// ════════════════════════════════════════════════════════════════
+// MOOD LAMP
+// ════════════════════════════════════════════════════════════════
+static bool   moodLampEnabled = true;
+static float  moodR=0,moodG=0,moodB=0;
+static float  moodTargetR=0,moodTargetG=0,moodTargetB=0;
+static bool   moodActive  = false;
+static uint32_t moodFadeT = 0;
+
+inline void rgb565ToRGB(uint16_t px, uint8_t &r, uint8_t &g, uint8_t &b) {
+  r=(px>>8)&0xF8; g=(px>>3)&0xFC; b=(px<<3)&0xF8;
+  r|=(r>>5); g|=(g>>6); b|=(b>>5);
+}
+
+void moodSampleFrame(const uint16_t* pixels, int count) {
+  if (!moodLampEnabled||!moodActive) return;
+  int step=max(1,count/MOOD_SAMPLE_COUNT);
+  uint32_t sumR=0,sumG=0,sumB=0; int sampled=0;
+  for(int i=0;i<count;i+=step) {
+    uint8_t r,g,b; rgb565ToRGB(pixels[i],r,g,b);
+    sumR+=r; sumG+=g; sumB+=b; sampled++;
+  }
+  if(!sampled) return;
+  moodTargetR=(float)sumR/sampled; moodTargetG=(float)sumG/sampled; moodTargetB=(float)sumB/sampled;
+}
+
+void moodUpdate() {
+  if (!moodLampEnabled) return;
+  if (moodActive) {
+    moodR+=(moodTargetR-moodR)*MOOD_SMOOTH_FACTOR;
+    moodG+=(moodTargetG-moodG)*MOOD_SMOOTH_FACTOR;
+    moodB+=(moodTargetB-moodB)*MOOD_SMOOTH_FACTOR;
+    float brScale=(float)brightness/255.0f, maxCh=max({moodR,moodG,moodB});
+    uint8_t r,g,b;
+    if(maxCh<1.0f){ r=MOOD_MIN_V; g=MOOD_MIN_V; b=MOOD_MIN_V; }
+    else { float norm=(MOOD_LED_MAX_BR*brScale)/maxCh; r=(uint8_t)constrain(moodR*norm,MOOD_MIN_V,255); g=(uint8_t)constrain(moodG*norm,MOOD_MIN_V,255); b=(uint8_t)constrain(moodB*norm,MOOD_MIN_V,255); }
+    neo.setPixelColor(0,neo.Color(r,g,b)); neo.show();
+  } else {
+    uint32_t now=millis();
+    if(now-moodFadeT>=MOOD_FADE_STEP_MS) {
+      moodFadeT=now;
+      moodR=max(0.0f,moodR-4.0f); moodG=max(0.0f,moodG-4.0f); moodB=max(0.0f,moodB-4.0f);
+      neo.setPixelColor(0,neo.Color((uint8_t)moodR,(uint8_t)moodG,(uint8_t)moodB)); neo.show();
+    }
+  }
+}
+void moodStop() { moodActive=false; moodFadeT=0; }
+void moodPausePulse() {
+  if(!moodLampEnabled) return;
+  float t=(sinf(millis()*3.14159f/800.0f)+1.0f)*0.5f;
+  uint8_t v=(uint8_t)(30.0f*t);
+  neo.setPixelColor(0,neo.Color(v,v,v)); neo.show();
+}
+
+// ════════════════════════════════════════════════════════════════
+// JPEG CALLBACK
+// ════════════════════════════════════════════════════════════════
+int jpegDrawCallback(JPEGDRAW *pDraw) {
+  uint16_t *buf = pDraw->pPixels;
+  int count = pDraw->iWidth * pDraw->iHeight;
+  moodSampleFrame(buf, count);
+  for(int i=0; i<count; i++) buf[i] = (buf[i]>>8) | (buf[i]<<8);
+  tft.pushImage(pDraw->x, pDraw->y, pDraw->iWidth, pDraw->iHeight, buf);
+  return 1;
+}
+
+// ════════════════════════════════════════════════════════════════
+// WIFI
+// ════════════════════════════════════════════════════════════════
+static std::vector<String> wifiSSIDs;
+static int    wifiSel      = 0;
+static char   wifiPassword[64] = {0};
+static int    wifiPassLen  = 0;
+static bool   wifiConnected = false;
+
+// ════════════════════════════════════════════════════════════════
+// VIDEO
+// ════════════════════════════════════════════════════════════════
+static std::vector<String> videoFiles;
+static int      videoSel         = 0;
+static int64_t  video_start_us   = 0;
+static int64_t  video_paused_us  = 0;
+static int64_t  pause_started_us = 0;
+static int      total_frames     = 0;
+static bool     videoPaused      = false;
+static String   currentVideoName = "";
+
+// ════════════════════════════════════════════════════════════════
+// TRIVIA
+// ════════════════════════════════════════════════════════════════
+struct TriviaCategory { const char* name; int id; };
+static const TriviaCategory TRIVIA_CATS[] = {
+  {"Semua Kategori",0},{"Pengetahuan Umum",9},{"Buku & Sastra",10},
+  {"Film",11},{"Musik",12},{"Sains & Alam",17},{"Komputer & IT",18},
+  {"Matematika",19},{"Olahraga",21},{"Geografi",22},{"Sejarah",23},
+  {"Politik",24},{"Seni & Budaya",25},{"Selebriti",26},{"Anime & Manga",31},
+};
+#define TRIVIA_CAT_COUNT 15
+static const int TRIVIA_AMOUNTS[] = {5,10,15,20};
+static const int TRIVIA_TIMES[]   = {10,15,20,30};
+#define TRIVIA_AMT_COUNT  4
+#define TRIVIA_TIME_COUNT 4
+static int triviaSetupRow=0,triviaSetCatIdx=0,triviaSetAmtIdx=1,triviaSetTimeIdx=1;
+struct TriviaQ { String question; String answers[4]; int correct; };
+static TriviaQ  triviaQ;
+static int      triviaAns=0,triviaScore=0,triviaTotal=0;
+static int      triviaTarget=10,triviaTimeLimit=15;
+static bool     triviaAnswered=false;
+static uint32_t triviaTimer=0;
+
+// ════════════════════════════════════════════════════════════════
+// FITUR STATE
+// ════════════════════════════════════════════════════════════════
+
+// ISS Tracker
+static float    issLat=0, issLon=0;
+static uint32_t issLastFetch=0;
+static bool     issFetched=false;
+#define ISS_UPDATE_MS 5000
+
+// APOD
+static String   apodTitle="", apodExplain="", apodDate="";
+static bool     apodFetched=false;
+
+// Stoic Quote
+static String   stoicQuote="", stoicAuthor="";
+static bool     stoicFetched=false;
+
+// Number Fact
+static String   numFactText="";
+static int      numFactN=0;
+static bool     numFactFetched=false;
+
+// Jokes
+static String   jokeText="";
+static bool     jokeFetched=false;
+static int      jokeSource=0;
+
+// Bored / Random Activity
+static String   boredActivity="", boredType="";
+static int      boredParticipants=1;
+static bool     boredFetched=false;
+
+// People in Space
+struct Astronaut { String name, craft; };
+static std::vector<Astronaut> astronauts;
+static int      astronautTotal=0;
+static bool     astronautFetched=false;
+static int      astronautSel=0;
+
+// Hacker News
+struct HNStory { String title; int score; int id; };
+static std::vector<HNStory> hnStories;
+static bool     hnFetched=false;
+static int      hnSel=0;
+
+// HN Comments — [NEW v9.1]
+struct HNComment { String author; String text; };
+static std::vector<HNComment> hnComments;
+static bool     hnCommentsFetched=false;
+static int      hnCommentsStoryIdx=-1;
+static int      hnCommentsSel=0;
+static int      hnCommentsScrollY=0;
+
+// Scroll untuk layar teks panjang
+static int      textScrollY=0;
+
+// ════════════════════════════════════════════════════════════════
+// MENU v9.0 — 16 ITEM
+// ════════════════════════════════════════════════════════════════
+static int menuSel = 0;
+static const char* menuItems[] = {
+  "VIDEO", "TRIVIA",
+  "FILE MANAGER", "WIFI", "SETTINGS", "POWER",
+  "BERITA RSS", "HACKER NEWS",
+  "DAD JOKE", "CHUCK NORRIS", "BORED",
+  "STOIC QUOTE", "NUMBER FACT",
+  "ISS TRACKER", "PEOPLE IN SPACE",
+  "APOD — NASA",
+};
+static const char* menuSubtitle[] = {
+  "putar .mjpeg SD",
+  "quiz online",
+  "browse & kelola SD",
+  "scan & sambungkan",
+  "brightness & info",
+  "restart / sleep",
+  "baca berita RSS",
+  "top 5 HackerNews",
+  "lelucon bapak-bapak",
+  "fakta Chuck Norris",
+  "ide saat bosan",
+  "kutipan bijak stoik",
+  "fakta unik angka",
+  "posisi ISS real-time",
+  "astronaut di orbit",
+  "foto luar angkasa NASA",
+};
+#define MENU_N 16
+
+static uint32_t _barPulseT = 0;
+static uint8_t  _barAlpha  = 160;
+static bool     _barUp     = true;
+static int powerSel = 2;
+static int menuScrollTop = 0;
+
+// ════════════════════════════════════════════════════════════════
+// UTILITAS
+// ════════════════════════════════════════════════════════════════
+inline void pushFrame() { mainBuf.pushSprite(0,0); }
+
+bool btnPressed(Btn b) {
+  uint32_t now=millis();
+  bool cur=(digitalRead(btnPins[b])==LOW);
+  if(cur&&!btnPrev[b]&&(now-btnLast[b]>50)){btnPrev[b]=true;btnLast[b]=now;return true;}
+  if(!cur) btnPrev[b]=false;
+  return false;
+}
+bool btnHeld(Btn b) { return digitalRead(btnPins[b])==LOW; }
+
+void btnFlushAll() {
+  uint32_t t=millis();
+  while(millis()-t<200) {
+    bool any=false;
+    for(int i=0;i<5;i++) if(digitalRead(btnPins[i])==LOW){any=true;break;}
+    if(!any) break;
+    delay(5);
+  }
+  for(int i=0;i<5;i++){btnPrev[i]=false;btnLast[i]=millis();}
+  comboFired=false;
+}
+
+bool btnComboLR() {
+  uint32_t now=millis();
+  if(digitalRead(BTN_L)==LOW) comboLTime=now;
+  if(digitalRead(BTN_R)==LOW) comboRTime=now;
+  bool both=btnHeld(B_L)&&btnHeld(B_R);
+  bool win=abs((long)(comboLTime-comboRTime))<80;
+  if(both&&win&&!comboFired){comboFired=true;return true;}
+  if(!both) comboFired=false;
+  return false;
+}
+
+void ledSet(uint8_t r,uint8_t g,uint8_t b){neo.setPixelColor(0,neo.Color(r,g,b));neo.show();}
+void ledPulse(uint32_t ms){
+  float t=(sinf(millis()*3.14159f/ms)+1.0f)*0.5f;
+  uint8_t v=(uint8_t)(50.0f*t); ledSet(v,v,v);
+}
+
+// ════════════════════════════════════════════════════════════════
+// RSSI 4-BAR HELPER — [NEW v9.1]
+// ════════════════════════════════════════════════════════════════
+// Gambar 4 bar sinyal WiFi seperti ikon sinyal HP
+// x,y = pojok kiri bawah area bar, totalW = lebar total ~14px
+void drawRssiBars(LGFX_Sprite& spr, int x, int y, int rssi) {
+  // Konversi RSSI ke level 0-4
+  // rssi: -50 dBm+ = 4 bar, -60 = 3, -70 = 2, -80 = 1, < -80 = 0
+  int level;
+  if (rssi >= -50)      level = 4;
+  else if (rssi >= -60) level = 3;
+  else if (rssi >= -70) level = 2;
+  else if (rssi >= -80) level = 1;
+  else                  level = 0;
+
+  // 4 bar, lebar 3px tiap bar, gap 1px, tinggi bertingkat
+  const int barW = 3;
+  const int gap  = 1;
+  const int maxH = 10;
+  for (int i = 0; i < 4; i++) {
+    int barH = 3 + i * 2;          // 3,5,7,9 px
+    int bx   = x + i * (barW + gap);
+    int by   = y - barH;
+    uint16_t col = (i < level) ? C_WHITE : C_DGRAY;
+    spr.fillRect(bx, by, barW, barH, col);
+  }
+  (void)maxH;
+}
+
+// ════════════════════════════════════════════════════════════════
+// UI HELPERS
+// ════════════════════════════════════════════════════════════════
+void uiHeader(const char* title) {
+  mainBuf.fillRect(0,0,SCR_W,24,C_XXDGRAY);
+  mainBuf.drawFastHLine(0,24,SCR_W,C_DGRAY);
+  mainBuf.setTextColor(C_WHITE); mainBuf.setFont(&fonts::Font2);
+  mainBuf.setCursor(6,8); mainBuf.print(title);
+  clockUpdate();
+  char timeBuf[12]; clockFormatTime(timeBuf,sizeof(timeBuf));
+  int tw=mainBuf.textWidth(timeBuf);
+  mainBuf.setTextColor(gClock.valid ? C_LGRAY : C_DGRAY);
+  mainBuf.setCursor(SCR_W-tw-22,8); mainBuf.print(timeBuf);
+
+  // WiFi indicator — 4-bar jika connected, X jika tidak
+  if(wifiConnected) {
+    int rssi = WiFi.RSSI();
+    drawRssiBars(mainBuf, SCR_W-16, 22, rssi);
+  } else {
+    // Tanda X kecil
+    mainBuf.drawLine(SCR_W-15,14,SCR_W-7,22,C_DGRAY);
+    mainBuf.drawLine(SCR_W-15,22,SCR_W-7,14,C_DGRAY);
+  }
+}
+
+void uiFooter(const char* hint) {
+  mainBuf.fillRect(0,SCR_H-16,SCR_W,16,C_XXDGRAY);
+  mainBuf.drawFastHLine(0,SCR_H-16,SCR_W,C_DGRAY);
+  mainBuf.setTextColor(C_DGRAY); mainBuf.setFont(&fonts::Font2);
+  mainBuf.setCursor(4,SCR_H-12); mainBuf.print(hint);
+}
+
+void uiCard(int x,int y,int w,int h,uint16_t border=0,int r=6) {
+  if(border==0) border=C_DGRAY;
+  mainBuf.fillRoundRect(x,y,w,h,r,C_SURFACE);
+  mainBuf.drawRoundRect(x,y,w,h,r,border);
+}
+
+void uiProgressBar(int x,int y,int w,int h,float pct,uint16_t col=0) {
+  if(col==0) col=C_WHITE;
+  pct=constrain(pct,0.0f,1.0f);
+  mainBuf.fillRoundRect(x,y,w,h,h/2,C_XDGRAY);
+  if(pct>0) mainBuf.fillRoundRect(x,y,(int)(w*pct),h,h/2,col);
+  mainBuf.drawRoundRect(x,y,w,h,h/2,C_DGRAY);
+}
+
+void uiCenteredText(const char* txt,int y,uint16_t col=0,const lgfx::IFont* font=&fonts::Font4) {
+  if(col==0) col=C_WHITE;
+  mainBuf.setFont(font); mainBuf.setTextColor(col);
+  int tw=mainBuf.textWidth(txt);
+  mainBuf.setCursor((SCR_W-tw)/2,y); mainBuf.print(txt);
+}
+
+int uiWrap(const String& txt,int x,int y,int maxW,int maxY,uint16_t col=0,int lineH=13) {
+  if(col==0) col=C_WHITE;
+  mainBuf.setTextColor(col); mainBuf.setFont(&fonts::Font2);
+  String word="",line="";
+  for(int i=0;i<=(int)txt.length();i++) {
+    char c=(i<(int)txt.length())?txt[i]:' ';
+    if(c==' '||c=='\n') {
+      String test=line.length()?line+" "+word:word;
+      if(mainBuf.textWidth(test.c_str())>maxW) {
+        mainBuf.setCursor(x,y); mainBuf.print(line); y+=lineH;
+        if(y+lineH>maxY){mainBuf.setCursor(x,y);mainBuf.print("...");return y;}
+        line=word;
+      } else line=test;
+      word="";
+    } else word+=c;
+  }
+  if(line.length()){mainBuf.setCursor(x,y);mainBuf.print(line);y+=lineH;}
+  return y;
+}
+
+int uiWrapScroll(const String& txt, int x, int startY, int maxW, int maxH,
+                 int scrollY, uint16_t col=0, int lineH=13) {
+  if(col==0) col=C_WHITE;
+  mainBuf.setTextColor(col); mainBuf.setFont(&fonts::Font2);
+  std::vector<String> lines;
+  String word="",line="";
+  for(int i=0;i<=(int)txt.length();i++) {
+    char c=(i<(int)txt.length())?txt[i]:' ';
+    if(c==' '||c=='\n') {
+      String test=line.length()?line+" "+word:word;
+      if(mainBuf.textWidth(test.c_str())>maxW) {
+        lines.push_back(line); line=word;
+      } else line=test;
+      word="";
+    } else word+=c;
+  }
+  if(line.length()) lines.push_back(line);
+  int totalLines = lines.size();
+  int visLines = maxH / lineH;
+  int maxScroll = max(0, (totalLines - visLines) * lineH);
+  scrollY = constrain(scrollY, 0, maxScroll);
+  int startLine = scrollY / lineH;
+  int y = startY;
+  for(int i=startLine; i<totalLines && y<startY+maxH; i++) {
+    mainBuf.setCursor(x, y); mainBuf.print(lines[i]); y+=lineH;
+  }
+  return maxScroll;
+}
+
+// ════════════════════════════════════════════════════════════════
+// BOOT ANIMATION
+// ════════════════════════════════════════════════════════════════
+bool tryPlayBootMjpeg() {
+  if(!mjpeg_buf) return false;
+  if(!SD.exists("/boot.mjpeg")) return false;
+  File bootFile=SD.open("/boot.mjpeg");
+  if(!bootFile) return false;
+  tft.fillScreen(C_BG);
+  mjpeg.setup(&bootFile, mjpeg_buf, jpegDrawCallback, false, 0, 0, SCR_W, SCR_H);
+  int frameCount=0; int64_t startUs=esp_timer_get_time();
+  while(bootFile.available()&&mjpeg.readMjpegBuf()) {
+    mjpeg.drawJpg(); frameCount++;
+    int64_t target=startUs+(int64_t)frameCount*FRAME_US;
+    int64_t delta=target-esp_timer_get_time();
+    if(delta>1000) delayMicroseconds((uint32_t)delta);
+  }
+  bootFile.close(); return true;
+}
+
+void drawSplash(const char* status="Initializing...") {
+  mainBuf.fillScreen(C_BG);
+  for(int i=0;i<6;i++){
+    uint16_t c=lgfx::color565(4+i*8,4+i*8,4+i*8);
+    mainBuf.fillRect(i*16,0,12,SCR_H,c);
+  }
+  mainBuf.setFont(&fonts::Font6); mainBuf.setTextColor(C_WHITE);
+  mainBuf.setCursor(110,12); mainBuf.print("MEDIA");
+  mainBuf.setTextColor(C_LGRAY);
+  mainBuf.setCursor(110,58); mainBuf.print("HUB");
+  mainBuf.drawFastVLine(104,6,SCR_H-12,C_MGRAY);
+  mainBuf.setFont(&fonts::Font2); mainBuf.setTextColor(C_DGRAY);
+  mainBuf.setCursor(110,108); mainBuf.print("ESP32-S3  MediaHub v9.1");
+  mainBuf.fillRoundRect(0,SCR_H-22,SCR_W,22,0,C_XXDGRAY);
+  mainBuf.drawFastHLine(0,SCR_H-22,SCR_W,C_DGRAY);
+  mainBuf.setTextColor(C_MGRAY);
+  int tw=mainBuf.textWidth(status);
+  mainBuf.setCursor((SCR_W-tw)/2,SCR_H-15); mainBuf.print(status);
+  pushFrame();
+}
+
+// ════════════════════════════════════════════════════════════════
+// MAIN MENU — SMOOTH ROUNDED
+// ════════════════════════════════════════════════════════════════
+void _updateBarPulse() {
+  uint32_t now=millis(); if(now-_barPulseT<18) return; _barPulseT=now;
+  if(_barUp){_barAlpha+=3;if(_barAlpha>=220){_barAlpha=220;_barUp=false;}}
+  else{_barAlpha-=3;if(_barAlpha<=90){_barAlpha=90;_barUp=true;}}
+}
+
+void drawMenu() {
+  _updateBarPulse();
+  mainBuf.fillScreen(C_BG);
+
+  // Header
+  mainBuf.fillRect(0,0,SCR_W,22,C_XXDGRAY);
+  mainBuf.drawFastHLine(0,22,SCR_W,C_DGRAY);
+  mainBuf.setFont(&fonts::Font2);
+  mainBuf.setTextColor(C_WHITE); mainBuf.setCursor(6,7); mainBuf.print("MEDIA HUB");
+  mainBuf.setTextColor(C_DGRAY); mainBuf.setCursor(82,7); mainBuf.print("v9.1");
+
+  clockUpdate();
+  char timeBuf[12]; clockFormatTime(timeBuf,sizeof(timeBuf));
+  mainBuf.setFont(&fonts::Font2);
+  mainBuf.setTextColor(gClock.valid?C_LGRAY:C_DGRAY);
+  int tw=mainBuf.textWidth(timeBuf);
+  mainBuf.setCursor((SCR_W-tw)/2,7); mainBuf.print(timeBuf);
+
+  // WiFi status di header menu — 4-bar atau teks noWF
+  if(wifiConnected){
+    mainBuf.setTextColor(C_MGRAY); mainBuf.setCursor(SCR_W-56,7); mainBuf.print("WiFi");
+    drawRssiBars(mainBuf, SCR_W-14, 20, WiFi.RSSI());
+  } else {
+    mainBuf.setTextColor(C_DGRAY); mainBuf.setCursor(SCR_W-34,7); mainBuf.print("noWF");
+  }
+
+  // RSS Ticker bawah
+  const int TICKER_H = 15;
+  const int TICKER_Y = SCR_H - TICKER_H;
+
+  if (rssFetched && !rssHeadlines.empty()) {
+    mainBuf.fillRect(0,TICKER_Y,SCR_W,TICKER_H,C_XXDGRAY);
+    mainBuf.drawFastHLine(0,TICKER_Y,SCR_W,C_DGRAY);
+    mainBuf.setFont(&fonts::Font2); mainBuf.setTextColor(C_DGRAY);
+    mainBuf.setCursor(2,TICKER_Y+3); mainBuf.print("RSS");
+    mainBuf.drawFastVLine(20,TICKER_Y+1,TICKER_H-2,C_DGRAY);
+    mainBuf.setClipRect(22,TICKER_Y,SCR_W-22,TICKER_H);
+    mainBuf.setTextColor(C_MGRAY);
+    mainBuf.setCursor(22+rssTickerX,TICKER_Y+3); mainBuf.print(rssTickerStr.c_str());
+    if(rssTickerX<0 && 22+rssTickerX+rssTickerW<SCR_W) {
+      mainBuf.setCursor(22+rssTickerX+rssTickerW,TICKER_Y+3); mainBuf.print(rssTickerStr.c_str());
+    }
+    mainBuf.clearClipRect();
+  } else if(wifiConnected) {
+    mainBuf.fillRect(0,TICKER_Y,SCR_W,TICKER_H,C_XXDGRAY);
+    mainBuf.drawFastHLine(0,TICKER_Y,SCR_W,C_DGRAY);
+    mainBuf.setFont(&fonts::Font2); mainBuf.setTextColor(C_DGRAY);
+    const char* rssMsg = rssFetching ? "RSS: mengambil..." : "RSS: belum ada";
+    mainBuf.setCursor(4,TICKER_Y+3); mainBuf.print(rssMsg);
+  }
+
+  // Daftar Menu — SMOOTH ROUNDED
+  const int VIS = 6;
+  if(menuSel < menuScrollTop) menuScrollTop = menuSel;
+  if(menuSel >= menuScrollTop + VIS) menuScrollTop = menuSel - VIS + 1;
+  menuScrollTop = constrain(menuScrollTop, 0, MENU_N - VIS);
+
+  const int MENU_Y     = 23;
+  const int MENU_BOT   = TICKER_Y - 2;
+  const int MENU_H     = MENU_BOT - MENU_Y;
+  const int ITEM_H_SEL = 30;
+  const int ITEM_H_NRM = 16;
+  const int GAP        = 2;
+  const int PAD        = 4;
+  const int W          = SCR_W - PAD*2;
+  const int RADIUS     = 6;
+
+  int curY = MENU_Y + 2;
+
+  for(int i = menuScrollTop; i < menuScrollTop + VIS && i < MENU_N; i++) {
+    bool sel = (i == menuSel);
+    int h = sel ? ITEM_H_SEL : ITEM_H_NRM;
+    if(curY + h > MENU_BOT) break;
+
+    int x = PAD, y = curY;
+
+    if(sel) {
+      mainBuf.fillRoundRect(x, y, W, h, RADIUS, C_XDGRAY);
+      mainBuf.drawRoundRect(x, y, W, h, RADIUS, C_DGRAY);
+      uint8_t av = _barAlpha >> 2;
+      uint16_t barCol = lgfx::color565(av+20, av+20, av+20);
+      mainBuf.fillRoundRect(x+1, y+3, 3, h-6, 2, barCol);
+      mainBuf.setFont(&fonts::Font2); mainBuf.setTextColor(C_DGRAY);
+      char numStr[4]; snprintf(numStr, sizeof(numStr), "%02d", i+1);
+      int nw = mainBuf.textWidth(numStr);
+      mainBuf.setCursor(x+W-nw-6, y+h/2-6); mainBuf.print(numStr);
+      mainBuf.setFont(&fonts::Font2); mainBuf.setTextColor(C_WHITE);
+      mainBuf.setCursor(x+10, y+4); mainBuf.print(menuItems[i]);
+      if(h >= 26) {
+        mainBuf.setFont(&fonts::Font2); mainBuf.setTextColor(C_MGRAY);
+        mainBuf.setCursor(x+10, y+h-13); mainBuf.print(menuSubtitle[i]);
+      }
+      mainBuf.setTextColor(C_DGRAY); mainBuf.setCursor(x+W-14, y+4); mainBuf.print(">");
+    } else {
+      uint16_t bgCol = (i % 2 == 0) ? C_XXDGRAY : C_BG;
+      mainBuf.fillRoundRect(x, y, W, h, 4, bgCol);
+      mainBuf.setFont(&fonts::Font2); mainBuf.setTextColor(C_DGRAY);
+      char numStr[4]; snprintf(numStr, sizeof(numStr), "%d", i+1);
+      mainBuf.setCursor(x+4, y+(h-12)/2);
+      mainBuf.print(numStr);
+      mainBuf.setTextColor(C_MGRAY);
+      mainBuf.setCursor(x+22, y+(h-12)/2);
+      mainBuf.print(menuItems[i]);
+    }
+    curY += h + GAP;
+  }
+
+  // Scrollbar
+  if(MENU_N > VIS) {
+    float pct = (float)menuScrollTop / (MENU_N - VIS);
+    int sbH = MENU_H * VIS / MENU_N;
+    int sbY = MENU_Y + 2 + (int)((MENU_H - sbH) * pct);
+    mainBuf.fillRect(SCR_W-3, MENU_Y+2, 2, MENU_H-4, C_DGRAY);
+    mainBuf.fillRect(SCR_W-3, sbY, 2, sbH, C_MGRAY);
+  }
+}
+
+// ════════════════════════════════════════════════════════════════
+// WIFI UI
+// ════════════════════════════════════════════════════════════════
+void scanWifi() {
+  mainBuf.fillScreen(C_BG); uiHeader("WIFI SETUP");
+  uiCenteredText("Scanning...",76,C_LGRAY,&fonts::Font2); pushFrame();
+  wifiSSIDs.clear(); wifiSel=0;
+  WiFi.mode(WIFI_STA); int n=WiFi.scanNetworks();
+  for(int i=0;i<n&&i<12;i++) wifiSSIDs.push_back(WiFi.SSID(i));
+  WiFi.scanDelete();
+}
+
+void drawWifiList() {
+  mainBuf.fillScreen(C_BG); uiHeader("PILIH WIFI");
+  // Tampilkan info saved SSID jika ada
+  if(strlen(savedSSID)>0) {
+    mainBuf.setFont(&fonts::Font2); mainBuf.setTextColor(C_DGRAY);
+    char savedInfo[72]; snprintf(savedInfo,sizeof(savedInfo),"Tersimpan: %s",savedSSID);
+    mainBuf.setCursor(4,28); mainBuf.print(savedInfo);
+    mainBuf.drawFastHLine(0,38,SCR_W,C_DGRAY);
+  }
+  if(wifiSSIDs.empty()){
+    uiCenteredText("Tidak ada jaringan",68,C_MGRAY,&fonts::Font2);
+    uiFooter("SEL:scan ulang  L+R:back"); pushFrame(); return;
+  }
+  int vis=5, itemH=25;
+  int startI=max(0,wifiSel-1), endI=min((int)wifiSSIDs.size()-1,startI+vis-1);
+  for(int i=startI;i<=endI;i++) {
+    int y=42+(i-startI)*(itemH+2); bool sel=(i==wifiSel);
+    mainBuf.fillRoundRect(4,y,SCR_W-8,itemH,6,sel?C_XDGRAY:C_XXDGRAY);
+    mainBuf.drawRoundRect(4,y,SCR_W-8,itemH,6,sel?C_MGRAY:C_DGRAY);
+    if(sel) mainBuf.fillRoundRect(4,y+4,2,itemH-8,2,C_WHITE);
+    mainBuf.setFont(&fonts::Font2); mainBuf.setTextColor(sel?C_WHITE:C_MGRAY);
+    mainBuf.setCursor(12,y+6);
+    String ssid=wifiSSIDs[i]; if(ssid.length()>32) ssid=ssid.substring(0,31)+"~";
+    mainBuf.print(ssid);
+    if(sel){mainBuf.setTextColor(C_DGRAY);mainBuf.setCursor(12,y+17);mainBuf.print("SEL untuk connect");}
+  }
+  uiFooter("UP/DW:scroll  SEL:pilih  L+R:back");
+}
+
+// ════════════════════════════════════════════════════════════════
+// KEYBOARD
+// ════════════════════════════════════════════════════════════════
+static const char KB_ROW0_LO[]="1234567890";
+static const char KB_ROW1_LO[]="qwertyuiop";
+static const char KB_ROW2_LO[]="asdfghjkl";
+static const char KB_ROW3_LO[]="zxcvbnm_@.";
+static const char KB_ROW0_UP[]="1234567890";
+static const char KB_ROW1_UP[]="QWERTYUIOP";
+static const char KB_ROW2_UP[]="ASDFGHJKL";
+static const char KB_ROW3_UP[]="ZXCVBNM_@.";
+static const char* KB_LO[]={KB_ROW0_LO,KB_ROW1_LO,KB_ROW2_LO,KB_ROW3_LO};
+static const char* KB_UP[]={KB_ROW0_UP,KB_ROW1_UP,KB_ROW2_UP,KB_ROW3_UP};
+static const char* KB_SP_LABEL[]={"CAP","SPC","DEL","OK"};
+static int  kbRow=1,kbCol=4;
+static bool kbCaps=false;
+
+int  kbRowLen(int r){if(r==4)return 4;return strlen(kbCaps?KB_UP[r]:KB_LO[r]);}
+char kbChar(int r,int c){if(r>=4)return 0;return(kbCaps?KB_UP[r]:KB_LO[r])[c];}
+
+void drawKeyboard() {
+  mainBuf.fillScreen(C_BG); uiHeader("PASSWORD");
+  uiCard(4,28,SCR_W-8,22,C_MGRAY);
+  mainBuf.setFont(&fonts::Font2); mainBuf.setTextColor(C_WHITE);
+  mainBuf.setCursor(10,35);
+  int dispStart=wifiPassLen>20?wifiPassLen-17:0;
+  if(dispStart>0) mainBuf.print("...");
+  for(int i=dispStart;i<wifiPassLen;i++) mainBuf.print('*');
+  mainBuf.print('_');
+  mainBuf.setTextColor(kbCaps?C_WHITE:C_DGRAY);
+  mainBuf.setCursor(SCR_W-40,35); mainBuf.print(kbCaps?"CAPS":"caps");
+  int startY=56,rowH=19;
+  for(int r=0;r<4;r++) {
+    int len=kbRowLen(r),y=startY+r*rowH,cellW=SCR_W/len;
+    for(int c=0;c<len;c++) {
+      bool sel=(r==kbRow&&c==kbCol); int x=c*cellW+1;
+      char ch[2]={kbChar(r,c),0};
+      if(sel){mainBuf.fillRoundRect(x,y,cellW-1,rowH-2,3,C_WHITE);mainBuf.setTextColor(C_BG);}
+      else{mainBuf.fillRoundRect(x,y,cellW-1,rowH-2,3,C_XDGRAY);mainBuf.setTextColor(C_LGRAY);}
+      mainBuf.setFont(&fonts::Font2);
+      mainBuf.setCursor(x+(cellW-1-mainBuf.textWidth(ch))/2,y+4); mainBuf.print(ch);
+    }
+  }
+  {
+    int r=4,y=startY+4*rowH,bw=(SCR_W-6)/4;
+    for(int c=0;c<4;c++) {
+      bool sel=(r==kbRow&&c==kbCol); int x=c*(bw+2)+1; bool capsA=(c==0&&kbCaps);
+      if(sel){mainBuf.fillRoundRect(x,y,bw,rowH-2,3,C_WHITE);mainBuf.setTextColor(C_BG);}
+      else{mainBuf.fillRoundRect(x,y,bw,rowH-2,3,C_XDGRAY);mainBuf.drawRoundRect(x,y,bw,rowH-2,3,capsA?C_WHITE:C_DGRAY);mainBuf.setTextColor(capsA?C_WHITE:C_LGRAY);}
+      mainBuf.setFont(&fonts::Font2);
+      int tw2=mainBuf.textWidth(KB_SP_LABEL[c]);
+      mainBuf.setCursor(x+(bw-tw2)/2,y+4); mainBuf.print(KB_SP_LABEL[c]);
+    }
+  }
+}
+
+int handleKeyboard() {
+  bool changed=false; int cols=kbRowLen(kbRow);
+  if(btnPressed(B_UP)){kbRow=(kbRow+4)%5;kbCol=min(kbCol,kbRowLen(kbRow)-1);changed=true;}
+  if(btnPressed(B_DW)){kbRow=(kbRow+1)%5;kbCol=min(kbCol,kbRowLen(kbRow)-1);changed=true;}
+  if(btnPressed(B_L)){kbCol=(kbCol+cols-1)%cols;changed=true;}
+  if(btnPressed(B_R)){kbCol=(kbCol+1)%cols;changed=true;}
+  if(btnPressed(B_SEL)){
+    if(kbRow==4){
+      if(kbCol==0){kbCaps=!kbCaps;changed=true;}
+      else if(kbCol==1&&wifiPassLen<63){wifiPassword[wifiPassLen++]=' ';wifiPassword[wifiPassLen]=0;changed=true;}
+      else if(kbCol==2&&wifiPassLen>0){wifiPassword[--wifiPassLen]=0;changed=true;}
+      else if(kbCol==3)return 2;
+    } else {
+      if(wifiPassLen<63){wifiPassword[wifiPassLen++]=kbChar(kbRow,kbCol);wifiPassword[wifiPassLen]=0;changed=true;}
+    }
+  }
+  return changed?1:0;
+}
+
+bool connectWifi(const char* ssid,const char* pass) {
+  mainBuf.fillScreen(C_BG); uiHeader("CONNECTING");
+  uiCenteredText(ssid,68,C_WHITE,&fonts::Font2);
+  uiCenteredText("Mohon tunggu...",86,C_MGRAY,&fonts::Font2);
+  uiProgressBar(16,112,SCR_W-32,6,0.0f); pushFrame();
+  WiFi.begin(ssid,pass);
+  uint32_t start=millis(),lastUpdate=0;
+  while(WiFi.status()!=WL_CONNECTED&&millis()-start<15000){
+    if(btnComboLR()){WiFi.disconnect();return false;}
+    if(millis()-lastUpdate>200){
+      lastUpdate=millis();
+      float p=min(1.0f,(float)(millis()-start)/15000.0f);
+      uiProgressBar(16,112,SCR_W-32,6,p); pushFrame(); ledPulse(500);
+    }
+    delay(20);
+  }
+  return WiFi.status()==WL_CONNECTED;
+}
+
+void drawWifiResult(bool ok,const char* ssid) {
+  mainBuf.fillScreen(C_BG); uiHeader(ok?"TERSAMBUNG!":"GAGAL");
+  if(ok){
+    uiCenteredText(ssid,64,C_WHITE,&fonts::Font2);
+    uiCenteredText(WiFi.localIP().toString().c_str(),80,C_LGRAY,&fonts::Font2);
+    ledSet(50,50,50);
+    // Tampilkan status tersimpan NVS
+    mainBuf.setFont(&fonts::Font2); mainBuf.setTextColor(C_DGRAY);
+    uiCenteredText("Tersimpan ke NVS",96,C_DGRAY,&fonts::Font2);
+  } else {
+    uiCenteredText("Koneksi gagal",68,C_LGRAY,&fonts::Font2);
+    uiCenteredText("Periksa password",84,C_DGRAY,&fonts::Font2);
+    ledSet(0,0,0);
+  }
+  uiFooter("SEL:lanjut  L+R:menu");
+}
+
+// ════════════════════════════════════════════════════════════════
+// VIDEO LIST & PLAYER
+// ════════════════════════════════════════════════════════════════
+void scanVideos() {
+  videoFiles.clear();
+  File dir=SD.open("/videos"); if(!dir) return;
+  while(true){
+    File f=dir.openNextFile(); if(!f) break;
+    String name=String(f.name()); name.toLowerCase();
+    if(name.endsWith(".mjpeg")||name.endsWith(".mjpg"))
+      videoFiles.push_back(String("/videos/")+f.name());
+    f.close();
+  }
+  dir.close(); std::sort(videoFiles.begin(),videoFiles.end());
+}
+
+void drawVideoList() {
+  mainBuf.fillScreen(C_BG); uiHeader("VIDEO");
+  mainBuf.setFont(&fonts::Font2);
+  mainBuf.setTextColor(moodLampEnabled?C_LGRAY:C_DGRAY);
+  mainBuf.setCursor(SCR_W-66,8);
+  mainBuf.print(moodLampEnabled?"MOOD:ON":"MOOD:OFF");
+  if(!mjpeg_buf){
+    uiCenteredText("ERROR: PSRAM error",50,C_MGRAY,&fonts::Font2);
+    uiFooter("L+R:back"); pushFrame(); return;
+  }
+  if(videoFiles.empty()){
+    uiCenteredText("Tidak ada file .mjpeg",64,C_DGRAY,&fonts::Font2);
+    uiCenteredText("/videos/*.mjpeg",80,C_XDGRAY,&fonts::Font2);
+    uiFooter("L+R:back"); return;
+  }
+  int vis=5,itemH=26;
+  int startI=max(0,videoSel-1),endI=min((int)videoFiles.size()-1,startI+vis-1);
+  for(int i=startI;i<=endI;i++){
+    int y=28+(i-startI)*(itemH+2); bool sel=(i==videoSel);
+    String path=videoFiles[i],fname=path.substring(path.lastIndexOf('/')+1);
+    if(fname.length()>34) fname=fname.substring(0,33)+"~";
+    mainBuf.fillRoundRect(4,y,SCR_W-8,itemH,5,sel?C_XDGRAY:C_XXDGRAY);
+    mainBuf.drawRoundRect(4,y,SCR_W-8,itemH,5,sel?C_MGRAY:C_DGRAY);
+    if(sel) mainBuf.fillRoundRect(4,y+4,2,itemH-8,2,C_WHITE);
+    mainBuf.setFont(&fonts::Font2); mainBuf.setTextColor(sel?C_WHITE:C_MGRAY);
+    mainBuf.setCursor(12,y+5); mainBuf.print(fname);
+    if(sel){mainBuf.setTextColor(C_DGRAY);mainBuf.setCursor(12,y+17);mainBuf.print("SEL:putar  R:toggle mood");}
+  }
+  uiFooter("UP/DW  SEL:putar  R:mood  L+R:back");
+}
+
+void _drawPauseOSD(const String& fname) {
+  tft.fillRoundRect(0,SCR_H-30,SCR_W,30,0,C_XXDGRAY);
+  tft.drawFastHLine(0,SCR_H-30,SCR_W,C_DGRAY);
+  tft.setFont(&fonts::Font2); tft.setTextColor(C_WHITE);
+  tft.setCursor(8,SCR_H-24); tft.print("|| PAUSE");
+  tft.setTextColor(C_DGRAY);
+  String sn=fname; if(sn.length()>26) sn=sn.substring(0,25)+"~";
+  tft.setCursor(8,SCR_H-12); tft.print(sn);
+  tft.setTextColor(C_MGRAY); tft.setCursor(SCR_W-90,SCR_H-12); tft.print("SEL:lanjut");
+}
+
+void playVideo(const String& path) {
+  if(!mjpeg_buf) {
+    appState=ST_VIDEO_LIST; drawVideoList(); pushFrame(); return;
+  }
+  File videoFile=SD.open(path.c_str());
+  if(!videoFile){
+    appState=ST_VIDEO_LIST; drawVideoList(); pushFrame(); return;
+  }
+  String fname=path.substring(path.lastIndexOf('/')+1);
+  currentVideoName=fname;
+  mjpeg.setup(&videoFile, mjpeg_buf, jpegDrawCallback, false, 0, 0, SCR_W, SCR_H);
+  tft.fillScreen(C_BG);
+  total_frames=0; video_paused_us=0; videoPaused=false;
+  bool firstFrame=true, osdDrawn=false;
+  moodActive=true; moodR=0; moodG=0; moodB=0;
+  moodTargetR=0; moodTargetG=0; moodTargetB=0;
+
+  while(videoFile.available() && mjpeg.readMjpegBuf()){
+    if(btnComboLR()){
+      videoFile.close(); moodStop(); ledSet(0,0,0);
+      appState=ST_VIDEO_LIST; drawVideoList(); pushFrame(); return;
+    }
+    if(btnPressed(B_SEL)){
+      videoPaused=!videoPaused;
+      if(videoPaused){ pause_started_us=esp_timer_get_time(); moodActive=false; moodFadeT=millis(); }
+      else moodActive=true;
+    }
+    while(videoPaused){
+      if(!osdDrawn){ _drawPauseOSD(fname); osdDrawn=true; }
+      moodPausePulse(); delay(20);
+      if(btnPressed(B_SEL)){
+        video_paused_us+=esp_timer_get_time()-pause_started_us;
+        videoPaused=false; osdDrawn=false; moodActive=true;
+      }
+      if(btnComboLR()){
+        videoFile.close(); moodStop(); ledSet(0,0,0);
+        appState=ST_VIDEO_LIST; drawVideoList(); pushFrame(); return;
+      }
+    }
+    mjpeg.drawJpg(); total_frames++; moodUpdate();
+    if(firstFrame){ firstFrame=false; video_start_us=esp_timer_get_time(); }
+    int64_t target_us=video_start_us+(int64_t)total_frames*FRAME_US-video_paused_us;
+    int64_t now_us=esp_timer_get_time(), delta_us=target_us-now_us;
+    if(delta_us>1000){
+      while(delta_us>1000){
+        delayMicroseconds(1000);
+        delta_us=target_us-esp_timer_get_time();
+        if(btnPressed(B_SEL)||btnComboLR()) break;
+      }
+      if(delta_us>0) delayMicroseconds((uint32_t)delta_us);
+    }
+  }
+  videoFile.close(); moodStop(); ledSet(0,0,0);
+  appState=ST_VIDEO_LIST; drawVideoList(); pushFrame();
+}
+
+// ════════════════════════════════════════════════════════════════
+// FILE MANAGER UI
+// ════════════════════════════════════════════════════════════════
+void drawFileManager() {
+  mainBuf.fillScreen(C_BG); uiHeader("FILE MANAGER");
+  mainBuf.setFont(&fonts::Font2); mainBuf.setTextColor(C_DGRAY);
+  mainBuf.setCursor(4,28);
+  String dispPath=fmCurrentPath;
+  if(dispPath.length()>38) dispPath="..."+dispPath.substring(dispPath.length()-35);
+  mainBuf.print(dispPath);
+  mainBuf.drawFastHLine(0,38,SCR_W,C_DGRAY);
+
+  if(fmEntries.empty()){
+    uiCenteredText("Folder kosong",78,C_DGRAY,&fonts::Font2);
+    uiFooter("L+R:back"); return;
+  }
+
+  const int ITEM_H=17,LIST_Y=40;
+  int fm_listH=SCR_H-LIST_Y-30;
+  int fm_vis=fm_listH/ITEM_H;
+  if(fmSel<fmScrollOff) fmScrollOff=fmSel;
+  if(fmSel>=fmScrollOff+fm_vis) fmScrollOff=fmSel-fm_vis+1;
+
+  for(int i=0;i<fm_vis&&(i+fmScrollOff)<(int)fmEntries.size();i++){
+    int idx=i+fmScrollOff; FsEntry& e=fmEntries[idx]; bool sel=(idx==fmSel);
+    int y=LIST_Y+i*ITEM_H;
+    if(sel){
+      mainBuf.fillRoundRect(0,y,SCR_W,ITEM_H,3,C_XDGRAY);
+      mainBuf.drawRoundRect(0,y,SCR_W,ITEM_H,3,C_MGRAY);
+      mainBuf.fillRoundRect(0,y+2,2,ITEM_H-4,2,C_WHITE);
+    } else if(i%2==0) mainBuf.fillRect(0,y,SCR_W,ITEM_H,C_XXDGRAY);
+    mainBuf.setFont(&fonts::Font2);
+    mainBuf.setTextColor(sel?(e.isDir?C_WHITE:C_LGRAY):(e.isDir?C_LGRAY:C_MGRAY));
+    mainBuf.setCursor(6,y+3);
+    mainBuf.print(e.isDir?"[D]":"   ");
+    String nm=e.name; if(nm.length()>28) nm=nm.substring(0,27)+"~";
+    mainBuf.setCursor(30,y+3); mainBuf.print(nm);
+    if(!e.isDir&&e.name!=".."){
+      String sz=fmFormatSize(e.size); int sw=mainBuf.textWidth(sz.c_str());
+      mainBuf.setTextColor(sel?C_DGRAY:C_XDGRAY);
+      mainBuf.setCursor(SCR_W-sw-4,y+3); mainBuf.print(sz);
+    }
+  }
+  {
+    float usedPct=(sdTotalBytes>0)?(float)sdUsedBytes/sdTotalBytes:0;
+    int barY2=SCR_H-28;
+    mainBuf.fillRect(0,barY2,SCR_W,12,C_XXDGRAY);
+    mainBuf.drawFastHLine(0,barY2,SCR_W,C_DGRAY);
+    mainBuf.setFont(&fonts::Font2); mainBuf.setTextColor(C_DGRAY);
+    mainBuf.setCursor(4,barY2+3);
+    char sdInfo[48]; snprintf(sdInfo,sizeof(sdInfo),"SD: %s / %s (%.0f%%)",
+      fmFormatSize(sdUsedBytes).c_str(),fmFormatSize(sdTotalBytes).c_str(),usedPct*100);
+    mainBuf.print(sdInfo);
+  }
+  if(fmConfirmDelete){
+    int bx=24,by=SCR_H/2-28,bw=SCR_W-48,bh=54;
+    mainBuf.fillRoundRect(bx,by,bw,bh,8,C_XDGRAY);
+    mainBuf.drawRoundRect(bx,by,bw,bh,8,C_WHITE);
+    uiCenteredText("Hapus file ini?",by+8,C_WHITE,&fonts::Font2);
+    String nm2=fmEntries[fmSel].name; if(nm2.length()>32) nm2=nm2.substring(0,31)+"~";
+    uiCenteredText(nm2.c_str(),by+24,C_LGRAY,&fonts::Font2);
+    mainBuf.setTextColor(C_DGRAY); mainBuf.setFont(&fonts::Font2);
+    mainBuf.setCursor(bx+8,by+bh-12); mainBuf.print("SEL:hapus  L:batal");
+  }
+  if(!fmConfirmDelete) uiFooter("UP/DW  SEL:masuk  R:hapus  L+R:back");
+}
+
+// ════════════════════════════════════════════════════════════════
+// RSS READER UI
+// ════════════════════════════════════════════════════════════════
+void drawRssReader() {
+  mainBuf.fillScreen(C_BG); uiHeader("BERITA RSS");
+  if(rssHeadlines.empty()){
+    if(rssFetching) uiCenteredText("Mengambil berita...",68,C_MGRAY,&fonts::Font2);
+    else if(!wifiConnected){ uiCenteredText("WiFi diperlukan",60,C_MGRAY,&fonts::Font2); uiCenteredText("Sambungkan WiFi dulu",78,C_DGRAY,&fonts::Font2); }
+    else { uiCenteredText("Tidak ada berita",68,C_MGRAY,&fonts::Font2); uiCenteredText("SEL untuk refresh",84,C_DGRAY,&fonts::Font2); }
+    uiFooter("SEL:refresh  L+R:back"); return;
+  }
+  mainBuf.setFont(&fonts::Font2); mainBuf.setTextColor(C_DGRAY);
+  char infoStr[40]; uint32_t minsAgo=(millis()-rssLastFetch)/60000;
+  snprintf(infoStr,sizeof(infoStr),"%d berita | %d mnt lalu",(int)rssHeadlines.size(),(int)minsAgo);
+  mainBuf.setCursor(4,28); mainBuf.print(infoStr);
+  mainBuf.drawFastHLine(0,37,SCR_W,C_DGRAY);
+
+  const int ITEM_H=27,LIST_Y=39;
+  int rss_listH=SCR_H-LIST_Y-16, rss_vis=rss_listH/ITEM_H;
+  if(rssViewSel<rssScrollOff) rssScrollOff=rssViewSel;
+  if(rssViewSel>=rssScrollOff+rss_vis) rssScrollOff=rssViewSel-rss_vis+1;
+
+  for(int i=0;i<rss_vis&&(i+rssScrollOff)<(int)rssHeadlines.size();i++){
+    int idx=i+rssScrollOff; RssHeadline& h=rssHeadlines[idx]; bool sel=(idx==rssViewSel);
+    int y=LIST_Y+i*ITEM_H;
+    if(sel){
+      mainBuf.fillRoundRect(0,y,SCR_W,ITEM_H,4,C_XDGRAY);
+      mainBuf.fillRoundRect(0,y+2,2,ITEM_H-4,2,C_WHITE);
+      mainBuf.drawRoundRect(0,y,SCR_W,ITEM_H,4,C_DGRAY);
+    }
+    mainBuf.setFont(&fonts::Font2);
+    mainBuf.setTextColor(sel?C_MGRAY:C_DGRAY); mainBuf.setCursor(6,y+3); mainBuf.print(h.source);
+    mainBuf.setTextColor(sel?C_WHITE:C_LGRAY);
+    String title=h.title;
+    while(title.length()>2&&mainBuf.textWidth((title+"...").c_str())>SCR_W-14) title.remove(title.length()-1);
+    if(h.title.length()>title.length()) title+="...";
+    mainBuf.setCursor(6,y+14); mainBuf.print(title);
+  }
+  uiFooter("UP/DW:scroll  SEL:refresh  L+R:back");
+}
+
+// ════════════════════════════════════════════════════════════════
+// TRIVIA
+// ════════════════════════════════════════════════════════════════
+static int _hexVal(char c){if(c>='0'&&c<='9')return c-'0';if(c>='A'&&c<='F')return c-'A'+10;if(c>='a'&&c<='f')return c-'a'+10;return 0;}
+String urlDecode(const String& s){
+  String o;o.reserve(s.length());
+  for(int i=0;i<(int)s.length();i++){char c=s[i];if(c=='%'&&i+2<(int)s.length()){o+=(char)((_hexVal(s[i+1])<<4)|_hexVal(s[i+2]));i+=2;}else if(c=='+')o+=' ';else o+=c;}
+  return o;
+}
+String decodeTrivia(const String& s){return htmlDecode(urlDecode(s));}
+
+void drawTriviaSetup(){
+  mainBuf.fillScreen(C_BG); uiHeader("TRIVIA SETUP");
+  const int ROW_Y[]={28,56,84,114},ROW_H=22;
+  char valCat[32],valAmt[8],valTime[12];
+  snprintf(valCat,sizeof(valCat),"%s",TRIVIA_CATS[triviaSetCatIdx].name);
+  snprintf(valAmt,sizeof(valAmt),"%d soal",TRIVIA_AMOUNTS[triviaSetAmtIdx]);
+  snprintf(valTime,sizeof(valTime),"%d detik",TRIVIA_TIMES[triviaSetTimeIdx]);
+  const char* LABELS[]={"Kategori","Jumlah Soal","Waktu/Soal",""};
+  const char* VALS[]={valCat,valAmt,valTime,""};
+  for(int r=0;r<3;r++){
+    bool sel=(triviaSetupRow==r); int y=ROW_Y[r];
+    mainBuf.fillRoundRect(4,y,SCR_W-8,ROW_H,5,sel?C_XDGRAY:C_BG);
+    mainBuf.drawRoundRect(4,y,SCR_W-8,ROW_H,5,sel?C_MGRAY:C_DGRAY);
+    mainBuf.setFont(&fonts::Font2);
+    mainBuf.setTextColor(sel?C_WHITE:C_LGRAY); mainBuf.setCursor(10,y+5); mainBuf.print(LABELS[r]);
+    String valStr=String("< ")+VALS[r]+" >";
+    if(mainBuf.textWidth(valStr.c_str())>160){String s=String(VALS[r]);if(s.length()>14)s=s.substring(0,13)+"~";valStr=String("< ")+s+" >";}
+    int tw2=mainBuf.textWidth(valStr.c_str());
+    mainBuf.setTextColor(sel?C_LGRAY:C_MGRAY); mainBuf.setCursor(SCR_W-tw2-8,y+5); mainBuf.print(valStr);
+  }
+  {
+    bool sel=(triviaSetupRow==3); int y=ROW_Y[3];
+    mainBuf.fillRoundRect(44,y,SCR_W-88,24,8,sel?C_WHITE:C_XDGRAY);
+    mainBuf.drawRoundRect(44,y,SCR_W-88,24,8,sel?C_WHITE:C_MGRAY);
+    mainBuf.setFont(&fonts::Font2); mainBuf.setTextColor(sel?C_BG:C_WHITE);
+    const char* lbl="MULAI QUIZ"; int tw2=mainBuf.textWidth(lbl);
+    mainBuf.setCursor((SCR_W-tw2)/2,y+6); mainBuf.print(lbl);
+  }
+  uiFooter("UP/DW:baris  L/R:ubah  SEL:ok");
+}
+
+bool handleTriviaSetup(){
+  bool redraw=false;
+  if(btnPressed(B_UP)){triviaSetupRow=(triviaSetupRow+3)%4;redraw=true;}
+  if(btnPressed(B_DW)){triviaSetupRow=(triviaSetupRow+1)%4;redraw=true;}
+  if(triviaSetupRow==0){if(btnPressed(B_L)){triviaSetCatIdx=(triviaSetCatIdx+TRIVIA_CAT_COUNT-1)%TRIVIA_CAT_COUNT;redraw=true;}if(btnPressed(B_R)){triviaSetCatIdx=(triviaSetCatIdx+1)%TRIVIA_CAT_COUNT;redraw=true;}}
+  else if(triviaSetupRow==1){if(btnPressed(B_L)){triviaSetAmtIdx=(triviaSetAmtIdx+TRIVIA_AMT_COUNT-1)%TRIVIA_AMT_COUNT;redraw=true;}if(btnPressed(B_R)){triviaSetAmtIdx=(triviaSetAmtIdx+1)%TRIVIA_AMT_COUNT;redraw=true;}}
+  else if(triviaSetupRow==2){if(btnPressed(B_L)){triviaSetTimeIdx=(triviaSetTimeIdx+TRIVIA_TIME_COUNT-1)%TRIVIA_TIME_COUNT;redraw=true;}if(btnPressed(B_R)){triviaSetTimeIdx=(triviaSetTimeIdx+1)%TRIVIA_TIME_COUNT;redraw=true;}}
+  if(btnPressed(B_SEL)){
+    if(triviaSetupRow==3) return true;
+    if(triviaSetupRow==0){triviaSetCatIdx=(triviaSetCatIdx+1)%TRIVIA_CAT_COUNT;redraw=true;}
+    if(triviaSetupRow==1){triviaSetAmtIdx=(triviaSetAmtIdx+1)%TRIVIA_AMT_COUNT;redraw=true;}
+    if(triviaSetupRow==2){triviaSetTimeIdx=(triviaSetTimeIdx+1)%TRIVIA_TIME_COUNT;redraw=true;}
+  }
+  if(redraw){drawTriviaSetup();pushFrame();}
+  return false;
+}
+
+bool fetchTrivia(){
+  if(!wifiConnected) return false;
+  char url[160]; int catId=TRIVIA_CATS[triviaSetCatIdx].id;
+  if(catId>0) snprintf(url,sizeof(url),"https://opentdb.com/api.php?amount=1&category=%d&type=multiple&encode=url3986",catId);
+  else snprintf(url,sizeof(url),"https://opentdb.com/api.php?amount=1&type=multiple&encode=url3986");
+  HTTPClient http; http.begin(url); http.setTimeout(10000);
+  int code=http.GET(); if(code!=200){http.end();return false;}
+  String payload=http.getString(); http.end();
+  DynamicJsonDocument doc(4096);
+  if(deserializeJson(doc,payload)) return false;
+  auto res=doc["results"][0]; if(res.isNull()) return false;
+  triviaQ.question=decodeTrivia(res["question"].as<String>());
+  triviaQ.correct=random(4);
+  String ca=decodeTrivia(res["correct_answer"].as<String>());
+  auto wa=res["incorrect_answers"].as<JsonArray>(); int wi=0;
+  for(int i=0;i<4;i++) triviaQ.answers[i]=(i==triviaQ.correct)?ca:decodeTrivia(wa[wi++].as<String>());
+  return true;
+}
+
+void drawTriviaLoad(){
+  static int spin=0; const char* dots[]={"   ",".  ",".. ","..."};
+  mainBuf.fillScreen(C_BG); uiHeader("TRIVIA");
+  uiCenteredText("Mengambil soal...",50,C_MGRAY,&fonts::Font2);
+  uiCenteredText(dots[spin++%4],66,C_LGRAY,&fonts::Font2);
+  char info[40]; snprintf(info,sizeof(info),"Soal %d dari %d",triviaTotal+1,triviaTarget);
+  uiCenteredText(info,88,C_DGRAY,&fonts::Font2);
+  uiCard(16,110,SCR_W-32,24,C_DGRAY);
+  char sc[24]; snprintf(sc,sizeof(sc),"Skor: %d / %d",triviaScore,triviaTotal);
+  mainBuf.setFont(&fonts::Font2); mainBuf.setTextColor(C_LGRAY);
+  int tw2=mainBuf.textWidth(sc); mainBuf.setCursor((SCR_W-tw2)/2,118); mainBuf.print(sc);
+}
+
+void drawTriviaQ(){
+  mainBuf.fillScreen(C_BG);
+  mainBuf.fillRect(0,0,SCR_W,24,C_XXDGRAY); mainBuf.drawFastHLine(0,24,SCR_W,C_DGRAY);
+  mainBuf.setFont(&fonts::Font2);
+  mainBuf.setTextColor(C_WHITE); mainBuf.setCursor(6,8); mainBuf.print("TRIVIA");
+  char sc[20]; snprintf(sc,sizeof(sc),"%d/%d",triviaTotal,triviaTarget);
+  mainBuf.setTextColor(C_LGRAY); mainBuf.setCursor(SCR_W-44,8); mainBuf.print(sc);
+  uint32_t el=(millis()-triviaTimer)/1000;
+  float pct=1.0f-min(1.0f,(float)el/(float)triviaTimeLimit);
+  uint16_t tc=pct>0.5f?C_WHITE:pct>0.25f?C_LGRAY:C_MGRAY;
+  uiProgressBar(0,24,SCR_W,4,pct,tc);
+  int secsLeft=max(0,(int)triviaTimeLimit-(int)el);
+  char secStr[8]; snprintf(secStr,sizeof(secStr),"%ds",secsLeft);
+  mainBuf.setFont(&fonts::Font2); mainBuf.setTextColor(tc);
+  mainBuf.setCursor(SCR_W-26,8); mainBuf.print(secStr);
+  uiCard(4,30,SCR_W-8,42,C_DGRAY);
+  uiWrap(triviaQ.question,10,36,SCR_W-20,70,C_WHITE,11);
+  int ansY=76,ansH=20,ansW=SCR_W-8;
+  const char* ANS_LABELS[]={"A","B","C","D"};
+  for(int i=0;i<4;i++){
+    int y2=ansY+i*(ansH+2); bool sel=(i==triviaAns);
+    mainBuf.fillRoundRect(4,y2,ansW,ansH,4,C_XXDGRAY);
+    if(triviaAnswered){
+      uint16_t border=(i==triviaQ.correct)?C_WHITE:(i==triviaAns)?C_MGRAY:C_XXDGRAY;
+      mainBuf.drawRoundRect(4,y2,ansW,ansH,4,border);
+      if(i==triviaQ.correct||i==triviaAns) mainBuf.fillRoundRect(4,y2+3,2,ansH-6,2,border);
+    } else {
+      mainBuf.drawRoundRect(4,y2,ansW,ansH,4,sel?C_MGRAY:C_DGRAY);
+      if(sel) mainBuf.fillRoundRect(4,y2+3,2,ansH-6,2,C_WHITE);
+    }
+    mainBuf.setFont(&fonts::Font2);
+    uint16_t txtCol=triviaAnswered?(i==triviaQ.correct?C_WHITE:C_DGRAY):(sel?C_WHITE:C_LGRAY);
+    mainBuf.setTextColor(txtCol);
+    mainBuf.setCursor(10,y2+4); mainBuf.print(ANS_LABELS[i]); mainBuf.print(".");
+    String ans=triviaQ.answers[i]; if(mainBuf.textWidth(ans.c_str())>ansW-34) ans=ans.substring(0,26)+"~";
+    mainBuf.setCursor(28,y2+4); mainBuf.print(ans);
+  }
+}
+
+void drawTriviaResult(bool correct){
+  mainBuf.fillScreen(C_BG); uiHeader(correct?"BETUL!":"SALAH!");
+  uiCenteredText(correct?":D":":(",32,correct?C_WHITE:C_MGRAY,&fonts::Font6);
+  uiCenteredText(correct?"Bagus!":"Coba lagi!",86,C_LGRAY,&fonts::Font2);
+  if(!correct){
+    mainBuf.setFont(&fonts::Font2); mainBuf.setTextColor(C_DGRAY);
+    mainBuf.setCursor(6,110); mainBuf.print("Jawaban: ");
+    mainBuf.setTextColor(C_WHITE);
+    String ans=triviaQ.answers[triviaQ.correct]; if(ans.length()>28) ans=ans.substring(0,27)+"~";
+    mainBuf.print(ans);
+  }
+  uiCard(16,128,SCR_W-32,26,C_DGRAY);
+  char sc[32]; snprintf(sc,sizeof(sc),"Skor %d/%d  |  soal %d/%d",triviaScore,triviaTotal,triviaTotal,triviaTarget);
+  mainBuf.setFont(&fonts::Font2); mainBuf.setTextColor(C_MGRAY);
+  int tw2=mainBuf.textWidth(sc); mainBuf.setCursor((SCR_W-tw2)/2,134); mainBuf.print(sc);
+  uiFooter(triviaTotal>=triviaTarget?"SEL:lihat hasil":"SEL:lanjut  L+R:menu");
+}
+
+void drawTriviaSummary(){
+  mainBuf.fillScreen(C_BG); uiHeader("HASIL QUIZ");
+  float pct=triviaTarget>0?(float)triviaScore/triviaTarget:0;
+  char sc[16]; snprintf(sc,sizeof(sc),"%d / %d",triviaScore,triviaTarget);
+  uiCenteredText(sc,32,C_WHITE,&fonts::Font6);
+  char pctStr[10]; snprintf(pctStr,sizeof(pctStr),"%.0f%%",pct*100);
+  uiCenteredText(pctStr,84,C_LGRAY,&fonts::Font2);
+  const char* kom=pct==1.0f?"Sempurna!":pct>=0.8f?"Bagus sekali!":pct>=0.6f?"Lumayan bagus!":pct>=0.4f?"Terus berlatih!":"Jangan menyerah!";
+  uiCenteredText(kom,104,C_WHITE,&fonts::Font2);
+  uiFooter("SEL:main lagi  L+R:menu");
+}
+
+// ════════════════════════════════════════════════════════════════
+// SETTINGS
+// ════════════════════════════════════════════════════════════════
+void drawSettings() {
+  mainBuf.fillScreen(C_BG); uiHeader("SETTINGS");
+
+  // Brightness
+  uiCard(4,28,SCR_W-8,34,C_DGRAY);
+  mainBuf.setFont(&fonts::Font2); mainBuf.setTextColor(C_LGRAY);
+  mainBuf.setCursor(10,35); mainBuf.print("Brightness");
+  char bStr[12]; snprintf(bStr,sizeof(bStr),"%d%%",brightness*100/255);
+  mainBuf.setTextColor(C_WHITE); int tw2=mainBuf.textWidth(bStr);
+  mainBuf.setCursor(SCR_W-tw2-10,35); mainBuf.print(bStr);
+  if(autoBrEnabled){mainBuf.setTextColor(C_MGRAY);mainBuf.setCursor(SCR_W-tw2-60,35);mainBuf.print("[AUTO]");}
+  uiProgressBar(10,46,SCR_W-20,6,(float)brightness/255.0f);
+  mainBuf.setFont(&fonts::Font2); mainBuf.setTextColor(C_DGRAY);
+  mainBuf.setCursor(10,54); mainBuf.print("L/R:ubah  SEL:toggle auto");
+
+  // Mood lamp
+  uiCard(4,68,SCR_W-8,24,moodLampEnabled?C_MGRAY:C_DGRAY);
+  mainBuf.setFont(&fonts::Font2); mainBuf.setTextColor(C_LGRAY);
+  mainBuf.setCursor(10,76); mainBuf.print("Mood Lamp");
+  int swX=SCR_W-52,swY=73,swW=36,swH=14;
+  mainBuf.fillRoundRect(swX,swY,swW,swH,7,moodLampEnabled?C_DGRAY:C_XDGRAY);
+  mainBuf.drawRoundRect(swX,swY,swW,swH,7,moodLampEnabled?C_WHITE:C_MGRAY);
+  int knobX=moodLampEnabled?(swX+swW-13):(swX+2);
+  mainBuf.fillCircle(knobX+5,swY+swH/2,5,moodLampEnabled?C_WHITE:C_MGRAY);
+  mainBuf.setTextColor(moodLampEnabled?C_WHITE:C_DGRAY); mainBuf.setCursor(swX-28,76); mainBuf.print(moodLampEnabled?"ON ":"OFF");
+
+  // Jam
+  uiCard(4,98,SCR_W-8,28,C_DGRAY);
+  clockUpdate();
+  char timeBuf[12]; clockFormatTime(timeBuf,sizeof(timeBuf));
+  mainBuf.setFont(&fonts::Font2); mainBuf.setTextColor(C_MGRAY);
+  mainBuf.setCursor(10,106); mainBuf.print("Jam:");
+  mainBuf.setTextColor(gClock.valid?C_WHITE:C_DGRAY); mainBuf.setCursor(46,106); mainBuf.print(timeBuf);
+  mainBuf.setTextColor(clockSynced?C_MGRAY:C_DGRAY); mainBuf.setCursor(SCR_W-52,106); mainBuf.print(clockSynced?"NTP OK":"no sync");
+  char dateBuf[24]; clockFormatDate(dateBuf,sizeof(dateBuf));
+  mainBuf.setTextColor(C_DGRAY); mainBuf.setCursor(10,118); mainBuf.print(dateBuf);
+
+  // Heap/PSRAM
+  uiCard(4,132,SCR_W-8,26,C_DGRAY);
+  mainBuf.setFont(&fonts::Font2); mainBuf.setTextColor(C_DGRAY); mainBuf.setCursor(10,140); mainBuf.print("Heap:");
+  char heapStr[16]; snprintf(heapStr,sizeof(heapStr),"%uKB",ESP.getFreeHeap()/1024);
+  mainBuf.setTextColor(C_LGRAY); mainBuf.setCursor(50,140); mainBuf.print(heapStr);
+  mainBuf.setTextColor(C_DGRAY); mainBuf.setCursor(100,140); mainBuf.print("PSRAM:");
+  char psramStr[16]; snprintf(psramStr,sizeof(psramStr),"%uKB",ESP.getFreePsram()/1024);
+  mainBuf.setTextColor(C_LGRAY); mainBuf.setCursor(148,140); mainBuf.print(psramStr);
+  mainBuf.setTextColor(C_DGRAY); mainBuf.setCursor(10,150); mainBuf.print("Temp:");
+  char tempStr[10]; snprintf(tempStr,sizeof(tempStr),"%.1fC",temperatureRead());
+  mainBuf.setTextColor(C_LGRAY); mainBuf.setCursor(50,150); mainBuf.print(tempStr);
+  uint32_t upSec=millis()/1000; char upStr[20]; snprintf(upStr,sizeof(upStr),"Up %02d:%02d",upSec/60,upSec%60);
+  mainBuf.setTextColor(C_DGRAY); mainBuf.setCursor(SCR_W-80,150); mainBuf.print(upStr);
+
+  // WiFi saved info + hapus
+  uiCard(4,SCR_H-40,SCR_W-8,22,C_DGRAY);
+  mainBuf.setFont(&fonts::Font2); mainBuf.setTextColor(C_DGRAY);
+  mainBuf.setCursor(10,SCR_H-34);
+  if(strlen(savedSSID)>0) {
+    char wfInfo[50]; snprintf(wfInfo,sizeof(wfInfo),"NVS: %s  [R:hapus]",savedSSID);
+    mainBuf.setTextColor(C_MGRAY); mainBuf.print(wfInfo);
+  } else {
+    mainBuf.print("NVS: tidak ada kredensial WiFi");
+  }
+
+  uiFooter("L/R:br  UP/DW:mood  SEL:auto  R:hapusWF");
+}
+
+// ════════════════════════════════════════════════════════════════
+// POWER MENU
+// ════════════════════════════════════════════════════════════════
+void drawPowerMenu(){
+  mainBuf.fillScreen(C_BG);
+  int bx=SCR_W/2-68,by=SCR_H/2-40,bw=136,bh=80;
+  mainBuf.fillRoundRect(bx,by,bw,bh,10,C_XDGRAY);
+  mainBuf.drawRoundRect(bx,by,bw,bh,10,C_MGRAY);
+  mainBuf.setFont(&fonts::Font2); mainBuf.setTextColor(C_WHITE);
+  int tw2=mainBuf.textWidth("POWER"); mainBuf.setCursor(bx+(bw-tw2)/2,by+6); mainBuf.print("POWER");
+  mainBuf.drawFastHLine(bx+6,by+20,bw-12,C_DGRAY);
+  const char* opts[]={"Restart","Deep Sleep","Batal"};
+  for(int i=0;i<3;i++){
+    int oy=by+26+i*16; bool sel=(i==powerSel);
+    if(sel){mainBuf.fillRoundRect(bx+4,oy,bw-8,14,4,C_DGRAY);mainBuf.drawRoundRect(bx+4,oy,bw-8,14,4,C_MGRAY);mainBuf.fillRoundRect(bx+4,oy+3,2,8,2,C_WHITE);}
+    mainBuf.setFont(&fonts::Font2); mainBuf.setTextColor(sel?C_WHITE:C_LGRAY);
+    tw2=mainBuf.textWidth(opts[i]); mainBuf.setCursor(bx+(bw-tw2)/2,oy+2); mainBuf.print(opts[i]);
+  }
+  mainBuf.setFont(&fonts::Font2); mainBuf.setTextColor(C_DGRAY);
+  mainBuf.setCursor(bx+4,by+bh-10); mainBuf.print("UP/DW  SEL:ok  L:batal");
+}
+
+// ════════════════════════════════════════════════════════════════
+// HELPER UMUM ONLINE
+// ════════════════════════════════════════════════════════════════
+void drawLoading(const char* title, const char* msg="Mengambil data...") {
+  mainBuf.fillScreen(C_BG); uiHeader(title);
+  static int spin=0; const char* dots[]={"·      ","· ·    ","· · ·  ","· · · ·"};
+  uiCenteredText(msg, 60, C_MGRAY, &fonts::Font2);
+  uiCenteredText(dots[spin++%4], 80, C_LGRAY, &fonts::Font2);
+  uiFooter("L+R:batal");
+  pushFrame();
+}
+
+// HTTP GET untuk HTTPS — pakai WiFiClientSecure dengan skip verify
+String httpGetSecure(const char* url, const char* userAgent="ESP32-Hub/9.1",
+                     const char* accept="application/json", int timeout=10000) {
+  if(!WiFi.isConnected()) return "";
+  WiFiClientSecure client;
+  client.setInsecure(); // skip SSL cert verify — OK untuk embedded device
+  HTTPClient http;
+  http.begin(client, url);
+  http.setTimeout(timeout);
+  http.addHeader("User-Agent", userAgent);
+  http.addHeader("Accept", accept);
+  int code = http.GET();
+  String result = "";
+  if(code==200) result = http.getString();
+  http.end();
+  return result;
+}
+
+// HTTP GET untuk HTTP plain (non-HTTPS) — pakai WiFiClient langsung
+// [FIX v9.1] HTTPClient kadang gagal follow untuk plain HTTP di ESP32
+String httpGetPlain(const char* host, int port, const char* path,
+                    int timeout=8000) {
+  if(!WiFi.isConnected()) return "";
+  WiFiClient client;
+  client.setTimeout(timeout/1000);
+  if(!client.connect(host, port)) return "";
+  // Kirim HTTP GET manual
+  client.print(String("GET ") + path + " HTTP/1.0\r\n");
+  client.print(String("Host: ") + host + "\r\n");
+  client.print("User-Agent: ESP32-Hub/9.1\r\n");
+  client.print("Accept: text/plain\r\n");
+  client.print("Connection: close\r\n\r\n");
+  // Tunggu response
+  uint32_t t = millis();
+  while(!client.available() && millis()-t < (uint32_t)timeout) delay(10);
+  // Skip headers
+  String response = "";
+  bool headerDone = false;
+  while(client.available()) {
+    String line = client.readStringUntil('\n');
+    if(!headerDone) {
+      if(line=="\r"||line=="\r\n"||line.length()<=1) headerDone=true;
+    } else {
+      response += line + "\n";
+    }
+  }
+  client.stop();
+  response.trim();
+  return response;
+}
+
+// ════════════════════════════════════════════════════════════════
+// [1] ISS TRACKER
+// ════════════════════════════════════════════════════════════════
+bool fetchISSNow() {
+  // open-notify.org — HTTP biasa, pakai HTTPClient langsung seperti v9.0
+  if(!WiFi.isConnected()) return false;
+  HTTPClient http;
+  http.begin("http://api.open-notify.org/iss-now.json");
+  http.setTimeout(8000);
+  http.addHeader("User-Agent","ESP32-Hub/9.1");
+  int code = http.GET();
+  if(code != 200) { http.end(); return false; }
+  String resp = http.getString();
+  http.end();
+  if(resp.isEmpty()) return false;
+  DynamicJsonDocument doc(256);
+  if(deserializeJson(doc,resp)) return false;
+  issLat = doc["iss_position"]["latitude"].as<float>();
+  issLon = doc["iss_position"]["longitude"].as<float>();
+  issFetched = true;
+  issLastFetch = millis();
+  return true;
+}
+
+void drawISSGlobe(float lat, float lon) {
+  const int gx=120, gy=40, gw=180, gh=90;
+  mainBuf.drawRoundRect(gx,gy,gw,gh,4,C_DGRAY);
+  mainBuf.fillRoundRect(gx+1,gy+1,gw-2,gh-2,3,C_XXDGRAY);
+  for(int lo=-180;lo<=180;lo+=60) {
+    int x=gx+1+(int)((lo+180.0f)/360.0f*(gw-2));
+    mainBuf.drawFastVLine(x,gy+1,gh-2,C_XDGRAY);
+  }
+  for(int la=-90;la<=90;la+=30) {
+    int y=gy+1+(int)((90.0f-la)/180.0f*(gh-2));
+    mainBuf.drawFastHLine(gx+1,y,gw-2,C_XDGRAY);
+  }
+  int eqY=gy+1+(gh-2)/2;
+  mainBuf.drawFastHLine(gx+1,eqY,gw-2,C_DGRAY);
+  int issX=gx+1+(int)((lon+180.0f)/360.0f*(gw-2));
+  int issY=gy+1+(int)((90.0f-lat)/180.0f*(gh-2));
+  issX=constrain(issX,gx+2,gx+gw-3);
+  issY=constrain(issY,gy+2,gy+gh-3);
+  uint32_t t=millis();
+  uint8_t flash=(t/500)%2==0?255:180;
+  uint16_t issDot=lgfx::color565(flash,flash,flash);
+  mainBuf.fillCircle(issX,issY,4,C_BG);
+  mainBuf.drawCircle(issX,issY,4,issDot);
+  mainBuf.fillCircle(issX,issY,2,issDot);
+  mainBuf.drawFastHLine(issX-7,issY,6,issDot);
+  mainBuf.drawFastHLine(issX+2,issY,6,issDot);
+  mainBuf.drawFastVLine(issX,issY-7,6,issDot);
+  mainBuf.drawFastVLine(issX,issY+2,6,issDot);
+}
+
+void drawISS() {
+  mainBuf.fillScreen(C_BG); uiHeader("ISS TRACKER");
+  if(!wifiConnected){
+    uiCenteredText("WiFi diperlukan",68,C_MGRAY,&fonts::Font2);
+    uiFooter("L+R:back"); pushFrame(); return;
+  }
+  if(issFetched) {
+    drawISSGlobe(issLat, issLon);
+    mainBuf.setFont(&fonts::Font2);
+    char latStr[24],lonStr[24];
+    snprintf(latStr,sizeof(latStr),"Lat : %+.4f", issLat);
+    snprintf(lonStr,sizeof(lonStr),"Lon : %+.4f", issLon);
+    mainBuf.setTextColor(C_LGRAY); mainBuf.setCursor(8,138); mainBuf.print(latStr);
+    mainBuf.setTextColor(C_LGRAY); mainBuf.setCursor(8,150); mainBuf.print(lonStr);
+    uint32_t secAgo=(millis()-issLastFetch)/1000;
+    char ageStr[24]; snprintf(ageStr,sizeof(ageStr),"%ds lalu", (int)secAgo);
+    mainBuf.setTextColor(C_DGRAY);
+    int tw=mainBuf.textWidth(ageStr);
+    mainBuf.setCursor(SCR_W-tw-6,144); mainBuf.print(ageStr);
+    mainBuf.setTextColor(C_DGRAY);
+    mainBuf.setCursor(SCR_W-90,154); mainBuf.print("27,600 km/h");
+  } else {
+    uiCenteredText("Mengambil posisi...",80,C_MGRAY,&fonts::Font2);
+  }
+  uiFooter("SEL:refresh  L+R:back");
+}
+
+// ════════════════════════════════════════════════════════════════
+// [2] APOD
+// ════════════════════════════════════════════════════════════════
+bool fetchAPOD() {
+  String resp = httpGetSecure("https://api.nasa.gov/planetary/apod?api_key=DEMO_KEY");
+  if(resp.isEmpty()) return false;
+  DynamicJsonDocument doc(12288); // Perbesar buffer untuk explanation panjang
+  DeserializationError err = deserializeJson(doc,resp);
+  if(err) { Serial.printf("[APOD] JSON err: %s\n", err.c_str()); return false; }
+  apodTitle   = doc["title"].as<String>();
+  apodDate    = doc["date"].as<String>();
+  apodExplain = doc["explanation"].as<String>();
+  // Fallback jika explanation kosong
+  if(apodExplain.isEmpty()) apodExplain = "(tidak ada penjelasan)";
+  apodFetched = true;
+  return true;
+}
+
+void drawAPOD() {
+  mainBuf.fillScreen(C_BG); uiHeader("APOD — NASA");
+  if(!wifiConnected){ uiCenteredText("WiFi diperlukan",68,C_MGRAY,&fonts::Font2); uiFooter("L+R:back"); pushFrame(); return; }
+  if(!apodFetched){ uiCenteredText("SEL untuk ambil data",80,C_MGRAY,&fonts::Font2); uiFooter("SEL:fetch  L+R:back"); pushFrame(); return; }
+
+  mainBuf.setFont(&fonts::Font2); mainBuf.setTextColor(C_DGRAY);
+  mainBuf.setCursor(4,26); mainBuf.print(apodDate);
+  mainBuf.setFont(&fonts::Font4); mainBuf.setTextColor(C_WHITE);
+  String tShort=apodTitle; if(mainBuf.textWidth(tShort.c_str())>SCR_W-10) tShort=tShort.substring(0,22)+"...";
+  mainBuf.setCursor(4,36); mainBuf.print(tShort);
+  mainBuf.drawFastHLine(0,54,SCR_W,C_DGRAY);
+  uiWrapScroll(apodExplain, 6, 57, SCR_W-12, SCR_H-73, textScrollY, C_LGRAY, 12);
+  uiFooter("UP/DW:scroll  SEL:refresh  L+R:back");
+}
+
+// ════════════════════════════════════════════════════════════════
+// [3] STOIC QUOTE — [FIX v9.1]
+// ════════════════════════════════════════════════════════════════
+bool fetchStoic() {
+  // API: stoicismquote.com — coba field "body", fallback "quote"
+  String resp = httpGetSecure("https://stoicismquote.com/api/v1/quote/random");
+  if(resp.isEmpty()) {
+    Serial.println("[Stoic] Response kosong");
+    return false;
+  }
+  Serial.printf("[Stoic] Raw: %s\n", resp.substring(0,200).c_str());
+
+  DynamicJsonDocument doc(4096);
+  DeserializationError err = deserializeJson(doc,resp);
+  if(err) {
+    Serial.printf("[Stoic] JSON err: %s\n", err.c_str());
+    return false;
+  }
+
+  // Coba berbagai field name yang mungkin digunakan API ini
+  String q = "";
+  if(!doc["body"].isNull())         q = doc["body"].as<String>();
+  else if(!doc["quote"].isNull())   q = doc["quote"].as<String>();
+  else if(!doc["text"].isNull())    q = doc["text"].as<String>();
+  else if(!doc["content"].isNull()) q = doc["content"].as<String>();
+
+  if(q.isEmpty()) {
+    // Coba ambil field pertama sebagai fallback
+    Serial.println("[Stoic] Semua field gagal, dump JSON:");
+    String dump; serializeJson(doc, dump);
+    Serial.println(dump.substring(0,300));
+    return false;
+  }
+
+  stoicQuote = q;
+
+  // Author: coba berbagai struktur
+  String a = "";
+  if(!doc["author"].isNull()) {
+    if(doc["author"].is<JsonObject>()) {
+      // Struktur nested: {"author": {"name": "..."}}
+      a = doc["author"]["name"].as<String>();
+    } else {
+      a = doc["author"].as<String>();
+    }
+  }
+  if(a.isEmpty()||a=="null") a = "Unknown";
+  stoicAuthor = a;
+
+  stoicFetched = true;
+  return true;
+}
+
+void drawStoic() {
+  mainBuf.fillScreen(C_BG); uiHeader("STOIC QUOTE");
+  if(!wifiConnected){ uiCenteredText("WiFi diperlukan",68,C_MGRAY,&fonts::Font2); uiFooter("L+R:back"); pushFrame(); return; }
+  if(!stoicFetched){ uiCenteredText("SEL untuk ambil kutipan",80,C_MGRAY,&fonts::Font2); uiFooter("SEL:fetch  L+R:back"); pushFrame(); return; }
+
+  mainBuf.setFont(&fonts::Font6); mainBuf.setTextColor(C_DGRAY);
+  mainBuf.setCursor(4,20); mainBuf.print("\"");
+
+  uiWrapScroll(stoicQuote, 20, 26, SCR_W-28, SCR_H-56, textScrollY, C_WHITE, 13);
+
+  mainBuf.drawFastHLine(0,SCR_H-38,SCR_W,C_DGRAY);
+  mainBuf.setFont(&fonts::Font2); mainBuf.setTextColor(C_MGRAY);
+  String aut = "— " + stoicAuthor;
+  int tw=mainBuf.textWidth(aut.c_str());
+  mainBuf.setCursor(SCR_W-tw-6,SCR_H-32); mainBuf.print(aut);
+
+  uiFooter("UP/DW:scroll  SEL:baru  L+R:back");
+}
+
+// ════════════════════════════════════════════════════════════════
+// [4] NUMBER FACT — [FIX v9.1]
+// ════════════════════════════════════════════════════════════════
+bool fetchNumberFact() {
+  numFactN = random(1,1000);
+  // [FIX] Gunakan httpGetPlain untuk HTTP plain numbersapi.com
+  char path[32]; snprintf(path, sizeof(path), "/%d/trivia", numFactN);
+  String resp = httpGetPlain("numbersapi.com", 80, path);
+  if(resp.isEmpty()) {
+    Serial.printf("[NumFact] Gagal fetch angka %d\n", numFactN);
+    return false;
+  }
+  resp.trim();
+  numFactText = resp;
+  numFactFetched = true;
+  Serial.printf("[NumFact] %d: %s\n", numFactN, resp.substring(0,80).c_str());
+  return true;
+}
+
+void drawNumberFact() {
+  mainBuf.fillScreen(C_BG); uiHeader("NUMBER FACT");
+  if(!wifiConnected){ uiCenteredText("WiFi diperlukan",68,C_MGRAY,&fonts::Font2); uiFooter("L+R:back"); pushFrame(); return; }
+  if(!numFactFetched){ uiCenteredText("SEL untuk fakta angka",80,C_MGRAY,&fonts::Font2); uiFooter("SEL:fetch  L+R:back"); pushFrame(); return; }
+
+  char numStr[12]; snprintf(numStr,sizeof(numStr),"%d",numFactN);
+  mainBuf.setFont(&fonts::Font6); mainBuf.setTextColor(C_LGRAY);
+  int nw=mainBuf.textWidth(numStr);
+  mainBuf.setCursor(SCR_W-nw-6,18); mainBuf.print(numStr);
+
+  mainBuf.drawFastHLine(0,56,SCR_W,C_DGRAY);
+  uiWrapScroll(numFactText, 6, 60, SCR_W-12, SCR_H-76, textScrollY, C_WHITE, 13);
+
+  uiFooter("UP/DW:scroll  SEL:angka baru  L+R:back");
+}
+
+// ════════════════════════════════════════════════════════════════
+// [5] DAD JOKE + CHUCK NORRIS
+// ════════════════════════════════════════════════════════════════
+bool fetchJoke() {
+  String resp;
+  if(jokeSource==0) {
+    resp = httpGetSecure("https://icanhazdadjoke.com/","ESP32-Hub/9.1","application/json");
+    if(resp.isEmpty()) return false;
+    DynamicJsonDocument doc(1024);
+    if(deserializeJson(doc,resp)) return false;
+    jokeText = doc["joke"].as<String>();
+  } else {
+    resp = httpGetSecure("https://api.chucknorris.io/jokes/random");
+    if(resp.isEmpty()) return false;
+    DynamicJsonDocument doc(1024);
+    if(deserializeJson(doc,resp)) return false;
+    jokeText = doc["value"].as<String>();
+  }
+  jokeFetched = true;
+  return true;
+}
+
+void drawJokes() {
+  mainBuf.fillScreen(C_BG);
+  uiHeader(jokeSource==0?"DAD JOKE":"CHUCK NORRIS");
+  if(!wifiConnected){ uiCenteredText("WiFi diperlukan",68,C_MGRAY,&fonts::Font2); uiFooter("L+R:back"); pushFrame(); return; }
+  if(!jokeFetched){ uiCenteredText("SEL untuk lelucon",80,C_MGRAY,&fonts::Font2); uiFooter("SEL:fetch  R:ganti jenis  L+R:back"); pushFrame(); return; }
+
+  const char* badge = jokeSource==0 ? "Dad Joke" : "Chuck Norris Fact";
+  mainBuf.fillRoundRect(4,26,SCR_W-8,14,5,C_XXDGRAY);
+  mainBuf.drawRoundRect(4,26,SCR_W-8,14,5,C_DGRAY);
+  uiCenteredText(badge,28,C_MGRAY,&fonts::Font2);
+
+  mainBuf.setFont(&fonts::Font2); mainBuf.setTextColor(C_DGRAY);
+  mainBuf.setCursor(6,28); mainBuf.print(jokeSource==0?"haha":"!!");
+
+  mainBuf.drawFastHLine(0,42,SCR_W,C_DGRAY);
+  uiWrapScroll(jokeText, 6, 46, SCR_W-12, SCR_H-62, textScrollY, C_WHITE, 13);
+
+  uiFooter("SEL:baru  R:Dad/Chuck  UP/DW:scroll");
+}
+
+// ════════════════════════════════════════════════════════════════
+// [6] RANDOM ACTIVITY (ganti Bored API) — [FIX v9.1]
+// ════════════════════════════════════════════════════════════════
+bool fetchBored() {
+  // API baru: www.randomactivityapi.com/api/activity
+  // Field: activity, type, participants (sama strukturnya)
+  String resp = httpGetSecure("https://www.randomactivityapi.com/api/activity");
+  if(resp.isEmpty()) {
+    Serial.println("[Bored] randomactivityapi.com gagal, coba fallback...");
+    // Fallback: generatepress.me (backup gratis)
+    resp = httpGetSecure("https://bored-api.appbrewery.com/random");
+  }
+  if(resp.isEmpty()) return false;
+  Serial.printf("[Bored] Raw: %s\n", resp.substring(0,200).c_str());
+  DynamicJsonDocument doc(2048);
+  DeserializationError err = deserializeJson(doc,resp);
+  if(err) { Serial.printf("[Bored] JSON err: %s\n", err.c_str()); return false; }
+  boredActivity     = doc["activity"].as<String>();
+  boredType         = doc["type"] | String("education");
+  boredParticipants = doc["participants"] | 1;
+  if(boredActivity.isEmpty()) return false;
+  boredFetched = true;
+  return true;
+}
+
+void drawBored() {
+  mainBuf.fillScreen(C_BG); uiHeader("AKTIVITAS ACAK");
+  if(!wifiConnected){ uiCenteredText("WiFi diperlukan",68,C_MGRAY,&fonts::Font2); uiFooter("L+R:back"); pushFrame(); return; }
+  if(!boredFetched){ uiCenteredText("SEL untuk ide aktivitas",80,C_MGRAY,&fonts::Font2); uiFooter("SEL:fetch  L+R:back"); pushFrame(); return; }
+
+  mainBuf.fillRoundRect(4,26,SCR_W-8,16,6,C_XXDGRAY);
+  mainBuf.drawRoundRect(4,26,SCR_W-8,16,6,C_DGRAY);
+  String typeStr = boredType; typeStr.toUpperCase();
+  uiCenteredText(typeStr.c_str(),28,C_MGRAY,&fonts::Font2);
+
+  char partStr[32]; snprintf(partStr,sizeof(partStr),"%d peserta",boredParticipants);
+  mainBuf.setFont(&fonts::Font2); mainBuf.setTextColor(C_DGRAY);
+  int tw=mainBuf.textWidth(partStr);
+  mainBuf.setCursor(SCR_W-tw-6,28); mainBuf.print(partStr);
+
+  mainBuf.drawFastHLine(0,44,SCR_W,C_DGRAY);
+
+  uiCard(4,48,SCR_W-8,60,C_DGRAY,8);
+  uiWrap(boredActivity, 12, 54, SCR_W-24, 108, C_WHITE, 14);
+
+  mainBuf.setFont(&fonts::Font2); mainBuf.setTextColor(C_XDGRAY);
+  mainBuf.setCursor(6,116); mainBuf.print("Coba aktivitas ini sekarang!");
+
+  uiFooter("SEL:ide baru  L+R:back");
+}
+
+// ════════════════════════════════════════════════════════════════
+// [7] PEOPLE IN SPACE
+// ════════════════════════════════════════════════════════════════
+bool fetchPeopleInSpace() {
+  // open-notify.org — HTTP biasa, pakai HTTPClient langsung seperti v9.0
+  if(!WiFi.isConnected()) return false;
+  HTTPClient http;
+  http.begin("http://api.open-notify.org/astros.json");
+  http.setTimeout(8000);
+  http.addHeader("User-Agent","ESP32-Hub/9.1");
+  int code = http.GET();
+  if(code != 200) { http.end(); return false; }
+  String resp = http.getString();
+  http.end();
+  if(resp.isEmpty()) return false;
+  DynamicJsonDocument doc(4096);
+  if(deserializeJson(doc,resp)) return false;
+  astronauts.clear();
+  astronautTotal = doc["number"] | 0;
+  auto people = doc["people"].as<JsonArray>();
+  for(auto p : people) {
+    astronauts.push_back({p["name"].as<String>(), p["craft"].as<String>()});
+  }
+  astronautFetched = true;
+  astronautSel = 0;
+  return true;
+}
+
+void drawPeopleInSpace() {
+  mainBuf.fillScreen(C_BG); uiHeader("MANUSIA DI LUAR ANGKASA");
+  if(!wifiConnected){ uiCenteredText("WiFi diperlukan",68,C_MGRAY,&fonts::Font2); uiFooter("L+R:back"); pushFrame(); return; }
+  if(!astronautFetched){ uiCenteredText("SEL untuk ambil data",80,C_MGRAY,&fonts::Font2); uiFooter("SEL:fetch  L+R:back"); pushFrame(); return; }
+
+  char totalStr[32]; snprintf(totalStr,sizeof(totalStr),"%d orang di orbit sekarang",astronautTotal);
+  mainBuf.fillRoundRect(4,26,SCR_W-8,16,6,C_XXDGRAY);
+  mainBuf.drawRoundRect(4,26,SCR_W-8,16,6,C_DGRAY);
+  uiCenteredText(totalStr,28,C_WHITE,&fonts::Font2);
+  mainBuf.drawFastHLine(0,44,SCR_W,C_DGRAY);
+
+  const int ITEM_H=20, LIST_Y=46;
+  int listH=SCR_H-LIST_Y-16, vis=listH/ITEM_H;
+  int scrollOff=0;
+  if(astronautSel>=scrollOff+vis) scrollOff=astronautSel-vis+1;
+
+  for(int i=0;i<vis&&(i+scrollOff)<(int)astronauts.size();i++){
+    int idx=i+scrollOff; bool sel=(idx==astronautSel);
+    int y=LIST_Y+i*ITEM_H;
+    Astronaut& a=astronauts[idx];
+    if(sel){
+      mainBuf.fillRoundRect(0,y,SCR_W,ITEM_H,4,C_XDGRAY);
+      mainBuf.fillRoundRect(0,y+3,2,ITEM_H-6,2,C_WHITE);
+    } else if(i%2==0) mainBuf.fillRect(0,y,SCR_W,ITEM_H,C_XXDGRAY);
+    mainBuf.setFont(&fonts::Font2);
+    char nStr[4]; snprintf(nStr,sizeof(nStr),"%d",idx+1);
+    mainBuf.setTextColor(C_DGRAY); mainBuf.setCursor(6,y+4); mainBuf.print(nStr);
+    mainBuf.setTextColor(sel?C_WHITE:C_LGRAY);
+    mainBuf.setCursor(24,y+4); mainBuf.print(a.name);
+    mainBuf.setTextColor(C_DGRAY);
+    int cw=mainBuf.textWidth(a.craft.c_str());
+    mainBuf.setCursor(SCR_W-cw-6,y+4); mainBuf.print(a.craft);
+  }
+  uiFooter("UP/DW:scroll  SEL:refresh  L+R:back");
+}
+
+// ════════════════════════════════════════════════════════════════
+// [8] HACKER NEWS — [FIX + KOMENTAR v9.1]
+// ════════════════════════════════════════════════════════════════
+bool fetchHackerNews() {
+  String resp = httpGetSecure("https://hacker-news.firebaseio.com/v0/topstories.json");
+  if(resp.isEmpty()) return false;
+  DynamicJsonDocument ids(8192);
+  if(deserializeJson(ids,resp)) return false;
+  hnStories.clear();
+  for(int i=0;i<5&&i<(int)ids.size();i++){
+    int storyId = ids[i];
+    char url[80]; snprintf(url,sizeof(url),"https://hacker-news.firebaseio.com/v0/item/%d.json",storyId);
+    String sr = httpGetSecure(url);
+    if(sr.isEmpty()) continue;
+    DynamicJsonDocument sd(2048);
+    if(deserializeJson(sd,sr)) continue;
+    String title = sd["title"] | String("(no title)");
+    int    score = sd["score"] | 0;
+    hnStories.push_back({title, score, storyId});
+    delay(100);
+  }
+  hnFetched = true;
+  hnSel = 0;
+  return !hnStories.empty();
+}
+
+// Fetch komentar via Algolia HN Search API
+// GET https://hn.algolia.com/api/v1/items/{id}
+// Response: {"children": [{"author":..., "text":...}, ...]}
+bool fetchHNComments(int storyId) {
+  hnComments.clear();
+  char url[80]; snprintf(url, sizeof(url), "https://hn.algolia.com/api/v1/items/%d", storyId);
+  String resp = httpGetSecure(url, "ESP32-Hub/9.1", "application/json", 12000);
+  if(resp.isEmpty()) {
+    Serial.printf("[HN] Komentar kosong untuk id %d\n", storyId);
+    return false;
+  }
+  Serial.printf("[HN] Komentar raw len=%d\n", resp.length());
+
+  // Buffer besar karena cerita HN bisa punya banyak nested children
+  DynamicJsonDocument doc(24576);
+  DeserializationError err = deserializeJson(doc, resp);
+  if(err) {
+    Serial.printf("[HN] JSON komentar err: %s\n", err.c_str());
+    return false;
+  }
+
+  auto children = doc["children"].as<JsonArray>();
+  int added = 0;
+  for(auto child : children) {
+    if(added >= 3) break; // Ambil max 3 komentar
+    String author = child["author"] | String("(anon)");
+    String text   = child["text"]   | String("");
+    if(text.isEmpty()) continue;
+    // Strip HTML tags dari teks komentar
+    String cleanText = stripHtml(text);
+    cleanText.trim();
+    if(cleanText.length() < 5) continue; // Skip komentar terlalu pendek
+    hnComments.push_back({author, cleanText});
+    added++;
+  }
+  hnCommentsFetched = true;
+  hnCommentsScrollY = 0;
+  hnCommentsSel = 0;
+  return !hnComments.empty();
+}
+
+void drawHackerNews() {
+  mainBuf.fillScreen(C_BG); uiHeader("HACKER NEWS");
+  if(!wifiConnected){ uiCenteredText("WiFi diperlukan",68,C_MGRAY,&fonts::Font2); uiFooter("L+R:back"); pushFrame(); return; }
+  if(!hnFetched){ uiCenteredText("SEL untuk ambil berita",80,C_MGRAY,&fonts::Font2); uiFooter("SEL:fetch  L+R:back"); pushFrame(); return; }
+  if(hnStories.empty()){ uiCenteredText("Gagal mengambil berita",68,C_MGRAY,&fonts::Font2); uiFooter("SEL:coba lagi  L+R:back"); pushFrame(); return; }
+
+  mainBuf.fillRoundRect(4,26,90,14,5,C_XXDGRAY);
+  mainBuf.drawRoundRect(4,26,90,14,5,C_DGRAY);
+  mainBuf.setFont(&fonts::Font2); mainBuf.setTextColor(C_MGRAY);
+  mainBuf.setCursor(8,28); mainBuf.print("Top 5 Stories");
+
+  mainBuf.drawFastHLine(0,42,SCR_W,C_DGRAY);
+
+  const int ITEM_H=24, LIST_Y=44;
+  for(int i=0;i<(int)hnStories.size();i++){
+    HNStory& s=hnStories[i]; bool sel=(i==hnSel);
+    int y=LIST_Y+i*(ITEM_H+2);
+    if(y+ITEM_H > SCR_H-16) break;
+    if(sel){
+      mainBuf.fillRoundRect(0,y,SCR_W,ITEM_H,5,C_XDGRAY);
+      mainBuf.fillRoundRect(0,y+3,2,ITEM_H-6,2,C_WHITE);
+      mainBuf.drawRoundRect(0,y,SCR_W,ITEM_H,5,C_DGRAY);
+    } else if(i%2==0) mainBuf.fillRoundRect(0,y,SCR_W,ITEM_H,4,C_XXDGRAY);
+    mainBuf.setFont(&fonts::Font2); mainBuf.setTextColor(C_DGRAY);
+    char nStr[4]; snprintf(nStr,sizeof(nStr),"%d",i+1);
+    mainBuf.setCursor(6,y+4); mainBuf.print(nStr);
+    mainBuf.setTextColor(sel?C_WHITE:C_LGRAY);
+    String title=s.title;
+    while(title.length()>2 && mainBuf.textWidth((title+"...").c_str())>SCR_W-54) title.remove(title.length()-1);
+    if(s.title.length()>title.length()) title+="...";
+    mainBuf.setCursor(22,y+4); mainBuf.print(title);
+    char sc[10]; snprintf(sc,sizeof(sc),"^%d",s.score);
+    mainBuf.setTextColor(C_DGRAY);
+    int sw=mainBuf.textWidth(sc);
+    mainBuf.setCursor(SCR_W-sw-4,y+13); mainBuf.print(sc);
+  }
+  uiFooter("UP/DW:pilih  SEL:komentar  L+R:back");
+}
+
+// Layar komentar HN — [NEW v9.1]
+void drawHNComments() {
+  mainBuf.fillScreen(C_BG);
+  // Header dengan judul berita
+  String storyTitle = "";
+  if(hnCommentsStoryIdx >= 0 && hnCommentsStoryIdx < (int)hnStories.size())
+    storyTitle = hnStories[hnCommentsStoryIdx].title;
+  uiHeader("HN COMMENTS");
+
+  // Judul berita di sub-header
+  mainBuf.fillRoundRect(0,24,SCR_W,16,0,C_XXDGRAY);
+  mainBuf.setFont(&fonts::Font2); mainBuf.setTextColor(C_MGRAY);
+  String dispTitle = storyTitle;
+  while(dispTitle.length()>2 && mainBuf.textWidth((dispTitle+"...").c_str()) > SCR_W-8)
+    dispTitle.remove(dispTitle.length()-1);
+  if(storyTitle.length()>dispTitle.length()) dispTitle+="...";
+  mainBuf.setCursor(4,27); mainBuf.print(dispTitle);
+  mainBuf.drawFastHLine(0,40,SCR_W,C_DGRAY);
+
+  if(!hnCommentsFetched) {
+    uiCenteredText("Mengambil komentar...",80,C_MGRAY,&fonts::Font2);
+    uiFooter("L+R:back"); pushFrame(); return;
+  }
+  if(hnComments.empty()) {
+    uiCenteredText("Tidak ada komentar",72,C_MGRAY,&fonts::Font2);
+    uiCenteredText("atau gagal memuat",86,C_DGRAY,&fonts::Font2);
+    uiFooter("SEL:coba lagi  L+R:back"); pushFrame(); return;
+  }
+
+  // Tampilkan komentar dengan separator, scroll secara global
+  // Bangun full teks dulu
+  String fullText = "";
+  for(int i=0;i<(int)hnComments.size();i++) {
+    char hdr[50]; snprintf(hdr,sizeof(hdr),"[%d] %s",i+1,hnComments[i].author.c_str());
+    fullText += String(hdr) + "\n";
+    fullText += hnComments[i].text;
+    if(i < (int)hnComments.size()-1) fullText += "\n\n---\n\n";
+  }
+
+  int maxScroll = uiWrapScroll(fullText, 4, 44, SCR_W-8, SCR_H-60, hnCommentsScrollY, C_WHITE, 12);
+
+  // Badge jumlah komentar
+  char cntStr[20]; snprintf(cntStr,sizeof(cntStr),"%d komentar",(int)hnComments.size());
+  mainBuf.setFont(&fonts::Font2); mainBuf.setTextColor(C_DGRAY);
+  int tw=mainBuf.textWidth(cntStr);
+  mainBuf.setCursor(SCR_W-tw-4,27); mainBuf.print(cntStr);
+
+  // Scrollbar
+  if(maxScroll > 0) {
+    int sbH = max(10, (int)((SCR_H-60) * (SCR_H-60) / ((SCR_H-60)+maxScroll)));
+    int sbY = 44 + (int)((SCR_H-60-sbH) * (float)hnCommentsScrollY / maxScroll);
+    mainBuf.fillRect(SCR_W-3, 44, 2, SCR_H-60, C_DGRAY);
+    mainBuf.fillRect(SCR_W-3, sbY, 2, sbH, C_MGRAY);
+  }
+
+  uiFooter("UP/DW:scroll  SEL:reload  L+R:back");
+}
+
+// ════════════════════════════════════════════════════════════════
+// SETUP
+// ════════════════════════════════════════════════════════════════
+void setup() {
+  Serial.begin(115200);
+  delay(500);
+  Serial.println("\n[BOOT] MediaHub v9.1");
+
+  for(int i=0;i<5;i++) pinMode(btnPins[i],INPUT_PULLUP);
+  neo.begin(); neo.setBrightness(255); ledSet(0,0,0);
+
+  tft.init(); tft.setRotation(1);
+  tft.setBrightness(brightness); tft.fillScreen(0x0000);
+  initColors();
+
+  mainBuf.setColorDepth(16);
+  if(!mainBuf.createSprite(SCR_W,SCR_H)){
+    tft.setFont(&fonts::Font4); tft.setTextColor(C_WHITE);
+    tft.setCursor(10,60); tft.print("PSRAM ERROR");
+    while(1) delay(1000);
+  }
+
+  size_t outBufBytes = SCR_W * OUTPUT_BUF_LINES * sizeof(uint16_t);
+  output_buf = (uint16_t*)heap_caps_malloc(outBufBytes, MALLOC_CAP_DMA | MALLOC_CAP_INTERNAL);
+  if(!output_buf) output_buf = (uint16_t*)heap_caps_malloc(outBufBytes, MALLOC_CAP_8BIT);
+
+  mjpeg_buf = (uint8_t*)heap_caps_malloc(MJPEG_BUF_SIZE, MALLOC_CAP_8BIT | MALLOC_CAP_SPIRAM);
+  Serial.printf("[MEM] mjpeg_buf=%p  PSRAM free=%uKB\n", mjpeg_buf, ESP.getFreePsram()/1024);
+
+  autoBrInit();
+  drawSplash("Initializing...");
+
+  for(int v=0;v<=50;v+=5){ledSet(v,v,v);delay(20);}
+  for(int v=50;v>=0;v-=5){ledSet(v,v,v);delay(20);}
+  ledSet(0,0,0);
+
+  sdSPI.begin(SD_SCK,SD_MISO,SD_MOSI,SD_CS);
+  bool sdOk=SD.begin(SD_CS,sdSPI,SD_SPI_SPEED);
+  if(sdOk){
+    drawSplash("SD OK...");
+    if(!tryPlayBootMjpeg()) drawSplash("SD OK — scanning...");
+    scanVideos(); fmScanDir("/");
+    char msg[48]; snprintf(msg,sizeof(msg),"SD OK — %d video",(int)videoFiles.size());
+    drawSplash(msg);
+  } else {
+    drawSplash("SD FAIL — periksa wiring"); delay(2000);
+  }
+
+  // [NEW v9.1] Load WiFi credentials dari NVS
+  wifiPrefsLoad();
+  if(strlen(savedSSID) > 0) {
+    drawSplash("Auto-connect WiFi...");
+    Serial.printf("[WiFi] Mencoba auto-connect ke: %s\n", savedSSID);
+    WiFi.mode(WIFI_STA);
+    WiFi.begin(savedSSID, savedPass);
+    uint32_t t = millis();
+    while(WiFi.status() != WL_CONNECTED && millis()-t < 12000) {
+      delay(200);
+      ledPulse(400);
+    }
+    if(WiFi.status() == WL_CONNECTED) {
+      wifiConnected = true;
+      clockSyncNTP();
+      char msg2[48]; snprintf(msg2,sizeof(msg2),"WiFi: %s", savedSSID);
+      drawSplash(msg2);
+      Serial.printf("[WiFi] Connected! IP: %s\n", WiFi.localIP().toString().c_str());
+    } else {
+      drawSplash("WiFi gagal — lanjut offline");
+      Serial.println("[WiFi] Auto-connect gagal");
+      delay(1000);
+    }
+    ledSet(0,0,0);
+  }
+
+  delay(600);
+  appState=ST_MENU;
+  drawMenu(); pushFrame();
+  btnFlushAll();
+  Serial.println("[OK] Boot selesai v9.1");
+}
+
+// ════════════════════════════════════════════════════════════════
+// HELPER: Cek WiFi untuk fitur online
+// ════════════════════════════════════════════════════════════════
+bool requireWifi(const char* featureName) {
+  if(wifiConnected) return true;
+  mainBuf.fillScreen(C_BG); uiHeader(featureName);
+  uiCenteredText("WiFi diperlukan!",70,C_MGRAY,&fonts::Font2);
+  uiCenteredText("Sambungkan WiFi dulu",88,C_DGRAY,&fonts::Font2);
+  uiFooter("SEL:ok"); pushFrame(); delay(2000);
+  drawMenu(); pushFrame(); btnFlushAll();
+  return false;
+}
+
+// ════════════════════════════════════════════════════════════════
+// LOOP
+// ════════════════════════════════════════════════════════════════
+void loop() {
+
+  autoBrUpdate();
+
+  if(wifiConnected&&clockSynced&&millis()-lastNtpSync>NTP_SYNC_INTERVAL_MS)
+    clockSyncNTP();
+
+  if(appState==ST_MENU) rssTickerUpdate();
+
+  // Global back combo
+  if(appState!=ST_MENU&&appState!=ST_SPLASH&&appState!=ST_POWER_MENU) {
+    if(btnComboLR()){
+      mainBuf.fillRoundRect(SCR_W/2-70,SCR_H/2-10,140,20,6,C_XDGRAY);
+      mainBuf.drawRoundRect(SCR_W/2-70,SCR_H/2-10,140,20,6,C_MGRAY);
+      mainBuf.setFont(&fonts::Font2); mainBuf.setTextColor(C_WHITE);
+      const char* msg="< kembali ke menu";
+      int tw2=mainBuf.textWidth(msg);
+      mainBuf.setCursor((SCR_W-tw2)/2,SCR_H/2-5); mainBuf.print(msg);
+      pushFrame(); ledSet(0,0,0); delay(300);
+      _barPulseT = millis();
+      appState=ST_MENU; textScrollY=0; drawMenu(); pushFrame(); btnFlushAll(); return;
+    }
+  }
+
+  switch(appState) {
+
+    // ── MENU UTAMA ──
+    case ST_MENU:
+      if(btnPressed(B_UP)){menuSel=(menuSel+MENU_N-1)%MENU_N;drawMenu();pushFrame();}
+      if(btnPressed(B_DW)){menuSel=(menuSel+1)%MENU_N;drawMenu();pushFrame();}
+      if(btnPressed(B_SEL)) {
+        switch(menuSel) {
+          case 0:
+            appState=ST_VIDEO_LIST; videoSel=0; drawVideoList(); pushFrame(); btnFlushAll(); break;
+          case 1:
+            if(!requireWifi("TRIVIA")) break;
+            appState=ST_TRIVIA_SETUP; triviaSetupRow=0; drawTriviaSetup(); pushFrame(); btnFlushAll(); break;
+          case 2:
+            appState=ST_FILE_MGR; fmScanDir(fmCurrentPath); drawFileManager(); pushFrame(); btnFlushAll(); break;
+          case 3:
+            appState=ST_WIFI_SCAN; scanWifi(); drawWifiList(); pushFrame(); btnFlushAll(); break;
+          case 4:
+            appState=ST_SETTINGS; drawSettings(); pushFrame(); btnFlushAll(); break;
+          case 5:
+            appState=ST_POWER_MENU; powerSel=2; drawPowerMenu(); pushFrame(); btnFlushAll(); break;
+          case 6:
+            appState=ST_RSS_READER;
+            if(wifiConnected&&rssNeedsRefresh()&&!rssFetching) rssFetchAll();
+            drawRssReader(); pushFrame(); btnFlushAll(); break;
+          case 7: // HACKER NEWS
+            if(!requireWifi("HACKER NEWS")) break;
+            appState=ST_HACKER_NEWS; textScrollY=0;
+            if(!hnFetched){ drawLoading("HACKER NEWS"); fetchHackerNews(); }
+            drawHackerNews(); pushFrame(); btnFlushAll(); break;
+          case 8: // DAD JOKE
+            if(!requireWifi("DAD JOKE")) break;
+            appState=ST_JOKES; jokeSource=0; textScrollY=0;
+            if(!jokeFetched){ drawLoading("DAD JOKE"); pushFrame(); fetchJoke(); }
+            drawJokes(); pushFrame(); btnFlushAll(); break;
+          case 9: // CHUCK NORRIS
+            if(!requireWifi("CHUCK NORRIS")) break;
+            appState=ST_JOKES; jokeSource=1; jokeFetched=false; textScrollY=0;
+            drawLoading("CHUCK NORRIS"); pushFrame(); fetchJoke();
+            drawJokes(); pushFrame(); btnFlushAll(); break;
+          case 10: // BORED
+            if(!requireWifi("AKTIVITAS")) break;
+            appState=ST_BORED; textScrollY=0;
+            if(!boredFetched){ drawLoading("AKTIVITAS ACAK"); pushFrame(); fetchBored(); }
+            drawBored(); pushFrame(); btnFlushAll(); break;
+          case 11: // STOIC QUOTE
+            if(!requireWifi("STOIC QUOTE")) break;
+            appState=ST_STOIC; textScrollY=0;
+            if(!stoicFetched){ drawLoading("STOIC QUOTE"); pushFrame(); fetchStoic(); }
+            drawStoic(); pushFrame(); btnFlushAll(); break;
+          case 12: // NUMBER FACT
+            if(!requireWifi("NUMBER FACT")) break;
+            appState=ST_NUMBER_FACT; textScrollY=0;
+            if(!numFactFetched){ drawLoading("NUMBER FACT"); pushFrame(); fetchNumberFact(); }
+            drawNumberFact(); pushFrame(); btnFlushAll(); break;
+          case 13: // ISS TRACKER
+            if(!requireWifi("ISS TRACKER")) break;
+            appState=ST_ISS_TRACKER;
+            if(!issFetched){ drawLoading("ISS TRACKER","Mengambil posisi ISS..."); pushFrame(); fetchISSNow(); }
+            drawISS(); pushFrame(); btnFlushAll(); break;
+          case 14: // PEOPLE IN SPACE
+            if(!requireWifi("PEOPLE IN SPACE")) break;
+            appState=ST_PEOPLE_SPACE;
+            if(!astronautFetched){ drawLoading("PEOPLE IN SPACE"); pushFrame(); fetchPeopleInSpace(); }
+            drawPeopleInSpace(); pushFrame(); btnFlushAll(); break;
+          case 15: // APOD
+            if(!requireWifi("APOD NASA")) break;
+            appState=ST_APOD; textScrollY=0;
+            if(!apodFetched){ drawLoading("APOD — NASA","Mengambil dari NASA..."); pushFrame(); fetchAPOD(); }
+            drawAPOD(); pushFrame(); btnFlushAll(); break;
+        }
+        break;
+      }
+      if(appState==ST_MENU && millis()-_barPulseT>=18){ drawMenu(); pushFrame(); }
+      if(wifiConnected&&rssNeedsRefresh()&&!rssFetching) rssFetchAll();
+      ledPulse(1500);
+      break;
+
+    // ── TRIVIA ──
+    case ST_TRIVIA_SETUP:
+      if(handleTriviaSetup()) {
+        triviaScore=0; triviaTotal=0;
+        triviaTarget=TRIVIA_AMOUNTS[triviaSetAmtIdx];
+        triviaTimeLimit=TRIVIA_TIMES[triviaSetTimeIdx];
+        appState=ST_TRIVIA_LOAD; btnFlushAll();
+      }
+      ledPulse(1200); break;
+
+    case ST_WIFI_SCAN:
+      if(btnPressed(B_UP)){if(wifiSel>0)wifiSel--;drawWifiList();pushFrame();}
+      if(btnPressed(B_DW)){if(wifiSel<(int)wifiSSIDs.size()-1)wifiSel++;drawWifiList();pushFrame();}
+      if(btnPressed(B_SEL)){
+        if(wifiSSIDs.empty()){scanWifi();drawWifiList();pushFrame();}
+        else{ memset(wifiPassword,0,sizeof(wifiPassword));wifiPassLen=0;kbRow=1;kbCol=4;kbCaps=false; appState=ST_WIFI_PASS; drawKeyboard(); pushFrame(); btnFlushAll(); }
+      }
+      ledPulse(1000); break;
+
+    case ST_WIFI_PASS: {
+      int kb=handleKeyboard();
+      if(kb==2){
+        appState=ST_WIFI_CONN;
+        bool ok=connectWifi(wifiSSIDs[wifiSel].c_str(),wifiPassword);
+        wifiConnected=ok;
+        if(ok){
+          // [NEW v9.1] Simpan kredensial ke NVS
+          wifiPrefsSave(wifiSSIDs[wifiSel].c_str(), wifiPassword);
+          clockSyncNTP(); rssLastFetch=0;
+        }
+        drawWifiResult(ok,wifiSSIDs[wifiSel].c_str()); pushFrame(); btnFlushAll();
+      }
+      else if(kb==1){drawKeyboard();pushFrame();}
+      break;
+    }
+    case ST_WIFI_CONN:
+      if(btnPressed(B_SEL)){appState=ST_MENU;drawMenu();pushFrame();btnFlushAll();} break;
+
+    case ST_VIDEO_LIST:
+      if(btnPressed(B_UP)){if(videoSel>0)videoSel--;drawVideoList();pushFrame();}
+      if(btnPressed(B_DW)){if(videoSel<(int)videoFiles.size()-1)videoSel++;drawVideoList();pushFrame();}
+      if(btnPressed(B_R)){moodLampEnabled=!moodLampEnabled;if(!moodLampEnabled)ledSet(0,0,0);drawVideoList();pushFrame();}
+      if(btnPressed(B_SEL)&&!videoFiles.empty()){appState=ST_VIDEO_PLAY;playVideo(videoFiles[videoSel]);btnFlushAll();}
+      ledPulse(1200); break;
+
+    case ST_VIDEO_PLAY: break;
+
+    case ST_FILE_MGR:
+      if(!fmConfirmDelete){
+        if(btnPressed(B_UP)){if(fmSel>0){fmSel--;drawFileManager();pushFrame();}}
+        if(btnPressed(B_DW)){if(fmSel<(int)fmEntries.size()-1){fmSel++;drawFileManager();pushFrame();}}
+        if(btnPressed(B_SEL)&&!fmEntries.empty()){
+          FsEntry& e=fmEntries[fmSel];
+          if(e.name==".."){int lastSlash=fmCurrentPath.lastIndexOf('/');if(lastSlash>0)fmCurrentPath=fmCurrentPath.substring(0,lastSlash);else fmCurrentPath="/";fmScanDir(fmCurrentPath);drawFileManager();pushFrame();}
+          else if(e.isDir){if(fmCurrentPath.endsWith("/"))fmCurrentPath+=e.name;else fmCurrentPath+="/"+e.name;fmScanDir(fmCurrentPath);drawFileManager();pushFrame();}
+        }
+        if(btnPressed(B_R)&&!fmEntries.empty()){if(fmEntries[fmSel].name!=".."){fmConfirmDelete=true;drawFileManager();pushFrame();}}
+        if(btnPressed(B_L)){if(fmCurrentPath!="/"){int lastSlash=fmCurrentPath.lastIndexOf('/');if(lastSlash>0)fmCurrentPath=fmCurrentPath.substring(0,lastSlash);else fmCurrentPath="/";fmScanDir(fmCurrentPath);drawFileManager();pushFrame();}}
+      } else {
+        if(btnPressed(B_SEL)){FsEntry& e=fmEntries[fmSel];String fullPath=(fmCurrentPath.endsWith("/")?fmCurrentPath:fmCurrentPath+"/")+e.name;fmDeletePath(fullPath);fmConfirmDelete=false;fmScanDir(fmCurrentPath);if(fmSel>=(int)fmEntries.size())fmSel=max(0,(int)fmEntries.size()-1);drawFileManager();pushFrame();}
+        if(btnPressed(B_L)){fmConfirmDelete=false;drawFileManager();pushFrame();}
+      }
+      ledPulse(1200); break;
+
+    case ST_RSS_READER:
+      if(btnPressed(B_UP)){if(rssViewSel>0){rssViewSel--;drawRssReader();pushFrame();}}
+      if(btnPressed(B_DW)){if(rssViewSel<(int)rssHeadlines.size()-1){rssViewSel++;drawRssReader();pushFrame();}}
+      if(btnPressed(B_SEL)){if(wifiConnected){mainBuf.fillScreen(C_BG);uiHeader("BERITA RSS");uiCenteredText("Mengambil...",74,C_MGRAY,&fonts::Font2);pushFrame();rssFetchAll();rssViewSel=0;}drawRssReader();pushFrame();}
+      if(wifiConnected&&rssNeedsRefresh()&&!rssFetching){rssFetchAll();drawRssReader();pushFrame();}
+      ledPulse(1200); break;
+
+    case ST_TRIVIA_LOAD:
+      drawTriviaLoad(); pushFrame(); ledPulse(400); delay(80);
+      if(fetchTrivia()){ triviaAns=0;triviaAnswered=false;triviaTimer=millis(); triviaTotal++; appState=ST_TRIVIA_Q;drawTriviaQ();pushFrame();btnFlushAll(); }
+      break;
+
+    case ST_TRIVIA_Q: {
+      bool redraw=false;
+      if(!triviaAnswered){
+        if(btnPressed(B_UP)){triviaAns=(triviaAns+3)%4;redraw=true;}
+        if(btnPressed(B_DW)){triviaAns=(triviaAns+1)%4;redraw=true;}
+        if(btnPressed(B_SEL)){triviaAnswered=true;bool correct=(triviaAns==triviaQ.correct);if(correct){triviaScore++;ledSet(50,50,50);}else ledSet(0,0,0);drawTriviaQ();pushFrame();delay(1500);appState=ST_TRIVIA_RESULT;drawTriviaResult(correct);pushFrame();btnFlushAll();break;}
+        if((uint32_t)(millis()-triviaTimer)/1000>=(uint32_t)triviaTimeLimit){triviaAnswered=true;ledSet(0,0,0);drawTriviaQ();pushFrame();delay(1500);appState=ST_TRIVIA_RESULT;drawTriviaResult(false);pushFrame();btnFlushAll();break;}
+        static uint32_t lastTimerRedraw=0;
+        if(millis()-lastTimerRedraw>500){lastTimerRedraw=millis();redraw=true;}
+      }
+      if(redraw){drawTriviaQ();pushFrame();}
+      ledPulse(800); break;
+    }
+
+    case ST_TRIVIA_RESULT:
+      if(btnPressed(B_SEL)){ledSet(0,0,0);if(triviaTotal>=triviaTarget){appState=ST_TRIVIA_SUMMARY;drawTriviaSummary();pushFrame();}else appState=ST_TRIVIA_LOAD;btnFlushAll();}
+      break;
+
+    case ST_TRIVIA_SUMMARY:
+      if(btnPressed(B_SEL)){triviaSetupRow=0;appState=ST_TRIVIA_SETUP;drawTriviaSetup();pushFrame();btnFlushAll();}
+      break;
+
+    case ST_SETTINGS: {
+      bool changed=false;
+      if(btnPressed(B_L)){if(!autoBrEnabled){brightness=max(20,brightness-20);tft.setBrightness(brightness);changed=true;}}
+      if(btnPressed(B_R)){
+        if(!autoBrEnabled){brightness=min(255,brightness+20);tft.setBrightness(brightness);changed=true;}
+        // [NEW v9.1] R juga hapus WiFi credentials dari NVS
+        else { wifiPrefsClear(); changed=true; }
+      }
+      // Tambah tombol R khusus hapus WiFi NVS jika autoBr tidak enabled
+      // (Di Settings: R saat autoBr off = brightness up, R saat autoBr on = hapus NVS)
+      // Untuk kejelasan: jika autoBr off, R naik brightness; jika autoBr on, R hapus NVS
+      if(btnPressed(B_SEL)){autoBrEnabled=!autoBrEnabled;if(!autoBrEnabled)tft.setBrightness(brightness);changed=true;}
+      if(btnPressed(B_UP)||btnPressed(B_DW)){moodLampEnabled=!moodLampEnabled;if(!moodLampEnabled)ledSet(0,0,0);changed=true;}
+      if(changed||millis()-lastStatsUpdate>1000){lastStatsUpdate=millis();drawSettings();pushFrame();}
+      break;
+    }
+
+    case ST_POWER_MENU:
+      if(btnPressed(B_UP)){powerSel=(powerSel+2)%3;drawPowerMenu();pushFrame();}
+      if(btnPressed(B_DW)){powerSel=(powerSel+1)%3;drawPowerMenu();pushFrame();}
+      if(btnPressed(B_L)){appState=ST_MENU;drawMenu();pushFrame();btnFlushAll();}
+      if(btnPressed(B_SEL)){
+        if(powerSel==0){mainBuf.fillScreen(C_BG);uiCenteredText("Restarting...",SCR_H/2-8,C_WHITE,&fonts::Font2);pushFrame();ledSet(0,0,0);delay(800);ESP.restart();}
+        else if(powerSel==1){mainBuf.fillScreen(C_BG);uiCenteredText("Sleeping...",SCR_H/2-8,C_LGRAY,&fonts::Font2);pushFrame();ledSet(0,0,0);tft.setBrightness(0);delay(500);esp_deep_sleep_start();}
+        else{appState=ST_MENU;drawMenu();pushFrame();btnFlushAll();}
+      }
+      break;
+
+    case ST_ISS_TRACKER:
+      if(millis()-issLastFetch > ISS_UPDATE_MS && wifiConnected) fetchISSNow();
+      if(btnPressed(B_SEL)){ fetchISSNow(); }
+      drawISS(); pushFrame();
+      ledPulse(2000);
+      delay(4); break;
+
+    case ST_APOD:
+      if(btnPressed(B_UP)){ textScrollY=max(0,textScrollY-13); drawAPOD(); pushFrame(); }
+      if(btnPressed(B_DW)){ textScrollY+=13; drawAPOD(); pushFrame(); }
+      if(btnPressed(B_SEL)){
+        textScrollY=0; apodFetched=false;
+        drawLoading("APOD — NASA","Mengambil dari NASA...");
+        pushFrame(); fetchAPOD(); drawAPOD(); pushFrame(); btnFlushAll();
+      }
+      ledPulse(1500); break;
+
+    case ST_STOIC:
+      if(btnPressed(B_UP)){ textScrollY=max(0,textScrollY-13); drawStoic(); pushFrame(); }
+      if(btnPressed(B_DW)){ textScrollY+=13; drawStoic(); pushFrame(); }
+      if(btnPressed(B_SEL)){
+        textScrollY=0; stoicFetched=false;
+        drawLoading("STOIC QUOTE"); pushFrame();
+        fetchStoic(); drawStoic(); pushFrame(); btnFlushAll();
+      }
+      ledPulse(1500); break;
+
+    case ST_NUMBER_FACT:
+      if(btnPressed(B_UP)){ textScrollY=max(0,textScrollY-13); drawNumberFact(); pushFrame(); }
+      if(btnPressed(B_DW)){ textScrollY+=13; drawNumberFact(); pushFrame(); }
+      if(btnPressed(B_SEL)){
+        textScrollY=0; numFactFetched=false;
+        drawLoading("NUMBER FACT"); pushFrame();
+        fetchNumberFact(); drawNumberFact(); pushFrame(); btnFlushAll();
+      }
+      ledPulse(1500); break;
+
+    case ST_JOKES:
+      if(btnPressed(B_UP)){ textScrollY=max(0,textScrollY-13); drawJokes(); pushFrame(); }
+      if(btnPressed(B_DW)){ textScrollY+=13; drawJokes(); pushFrame(); }
+      if(btnPressed(B_R)){
+        jokeSource=(jokeSource+1)%2; jokeFetched=false; textScrollY=0;
+        drawLoading(jokeSource==0?"DAD JOKE":"CHUCK NORRIS"); pushFrame();
+        fetchJoke(); drawJokes(); pushFrame(); btnFlushAll();
+      }
+      if(btnPressed(B_SEL)){
+        textScrollY=0; jokeFetched=false;
+        drawLoading(jokeSource==0?"DAD JOKE":"CHUCK NORRIS"); pushFrame();
+        fetchJoke(); drawJokes(); pushFrame(); btnFlushAll();
+      }
+      ledPulse(1500); break;
+
+    case ST_BORED:
+      if(btnPressed(B_SEL)){
+        boredFetched=false;
+        drawLoading("AKTIVITAS ACAK"); pushFrame();
+        fetchBored(); drawBored(); pushFrame(); btnFlushAll();
+      }
+      ledPulse(1500); break;
+
+    case ST_PEOPLE_SPACE:
+      if(btnPressed(B_UP)){ if(astronautSel>0){astronautSel--;drawPeopleInSpace();pushFrame();} }
+      if(btnPressed(B_DW)){ if(astronautSel<(int)astronauts.size()-1){astronautSel++;drawPeopleInSpace();pushFrame();} }
+      if(btnPressed(B_SEL)){
+        astronautFetched=false; astronauts.clear();
+        drawLoading("PEOPLE IN SPACE"); pushFrame();
+        fetchPeopleInSpace(); drawPeopleInSpace(); pushFrame(); btnFlushAll();
+      }
+      ledPulse(1500); break;
+
+    case ST_HACKER_NEWS:
+      if(btnPressed(B_UP)){ if(hnSel>0){hnSel--;drawHackerNews();pushFrame();} }
+      if(btnPressed(B_DW)){ if(hnSel<(int)hnStories.size()-1){hnSel++;drawHackerNews();pushFrame();} }
+      if(btnPressed(B_SEL)){
+        // [NEW v9.1] SEL = buka layar komentar story yang dipilih
+        if(!hnStories.empty()) {
+          hnCommentsStoryIdx = hnSel;
+          hnCommentsFetched = false;
+          hnComments.clear();
+          hnCommentsScrollY = 0;
+          appState = ST_HN_COMMENTS;
+          drawLoading("HN COMMENTS","Mengambil komentar...");
+          pushFrame();
+          fetchHNComments(hnStories[hnSel].id);
+          drawHNComments(); pushFrame(); btnFlushAll();
+        }
+      }
+      if(btnPressed(B_R)){
+        // R = refresh daftar berita
+        hnFetched=false; hnStories.clear();
+        drawLoading("HACKER NEWS"); pushFrame();
+        fetchHackerNews(); drawHackerNews(); pushFrame(); btnFlushAll();
+      }
+      ledPulse(1500); break;
+
+    // [NEW v9.1] Layar komentar HN
+    case ST_HN_COMMENTS:
+      if(btnPressed(B_UP)){ hnCommentsScrollY=max(0,hnCommentsScrollY-12); drawHNComments(); pushFrame(); }
+      if(btnPressed(B_DW)){ hnCommentsScrollY+=12; drawHNComments(); pushFrame(); }
+      if(btnPressed(B_SEL)){
+        // Reload komentar
+        hnCommentsFetched=false; hnComments.clear(); hnCommentsScrollY=0;
+        drawLoading("HN COMMENTS","Mengambil komentar...");
+        pushFrame();
+        if(hnCommentsStoryIdx>=0&&hnCommentsStoryIdx<(int)hnStories.size())
+          fetchHNComments(hnStories[hnCommentsStoryIdx].id);
+        drawHNComments(); pushFrame(); btnFlushAll();
+      }
+      ledPulse(1500); break;
+
+    default: break;
+  }
+
+  delay(4);
+}
