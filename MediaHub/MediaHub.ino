@@ -118,7 +118,7 @@ uint32_t tankGameT = 0;
 bool tankGameOver = false;
 int tankScore = 0;
 
-uint32_t lastBfsT = 0;
+uint32_t lastBfsT = 0; std::vector<MSNode> tankPath; int tankShake = 0;
 
 float birdY, birdV;
 
@@ -376,7 +376,7 @@ enum AppState {
   ST_HN_COMMENTS,    // [NEW v9.1] Layar komentar HN
   ST_GAME_MENU, ST_TICTACTOE_MODE, ST_TICTACTOE, ST_TICTACTOE_OVER,
   ST_TANK_MODE, ST_TANK, ST_TANK_OVER,
-  ST_FLAPPY, ST_FLAPPY_OVER,
+  ST_FLAPPY_MODE, ST_FLAPPY, ST_FLAPPY_OVER,
   ST_MINESWEEPER_SIZE, ST_MINESWEEPER, ST_MINESWEEPER_OVER
 };
 static AppState appState = ST_SPLASH;
@@ -2894,7 +2894,7 @@ void loop() {
       if(btnPressed(B_SEL)){
         if(gameMenuSel==0) appState=ST_TICTACTOE_MODE;
         else if(gameMenuSel==1) appState=ST_TANK_MODE;
-        else if(gameMenuSel==2) appState=ST_FLAPPY;
+        else if(gameMenuSel==2) appState=ST_FLAPPY_MODE;
         else if(gameMenuSel==3) appState=ST_MINESWEEPER_SIZE;
         btnFlushAll();
       }
@@ -2911,6 +2911,8 @@ void loop() {
       tankInit(); appState=ST_TANK; drawTank(); pushFrame(); break;
     case ST_TANK:
       handleTank(); break;
+    case ST_FLAPPY_MODE:
+      flappyInit(); appState=ST_FLAPPY; drawFlappy(); pushFrame(); break;
     case ST_FLAPPY:
       handleFlappy(); break;
     case ST_FLAPPY_OVER:
@@ -3208,12 +3210,13 @@ void tankInit() {
   playerTank = {1.5f, 1.5f, 0, 3, 0, false};
   aiTank = {17.5f, 8.5f, 3.14f, 3, 0, true};
   bullets.clear();
-  tankGameOver = false; tankScore = 0;
+  tankGameOver = false; tankScore = 0; tankShake = 0;
+  tankPath.clear();
 }
 
 void drawTank() {
   mainBuf.fillScreen(C_BG); uiHeader("TANK BATTLE");
-  const int T_SZ = 16, OFF_X = 10, OFF_Y = 26;
+  const int T_SZ = 14; int OFF_X = 15, OFF_Y = 25; if(tankShake > 0) { OFF_X += random(-tankShake, tankShake); OFF_Y += random(-tankShake, tankShake); }
 
   for(int y=0; y<10; y++) {
     for(int x=0; x<19; x++) {
@@ -3254,14 +3257,37 @@ void drawTank() {
 }
 
 
-
 void tankBFS() {
-  if(millis() - lastBfsT < 500) return;
+  if(millis() - lastBfsT < 600) return;
   lastBfsT = millis();
-  int tx = (int)playerTank.x, ty = (int)playerTank.y;
-  int ax = (int)aiTank.x, ay = (int)aiTank.y;
-  if(ax == tx && ay == ty) return;
-  aiTank.angle = atan2(ty + 0.5f - aiTank.y, tx + 0.5f - aiTank.x);
+  int startX = (int)aiTank.x, startY = (int)aiTank.y;
+  int targetX = (int)playerTank.x, targetY = (int)playerTank.y;
+  if(startX == targetX && startY == targetY) return;
+  int dists[10][19];
+  for(int y=0; y<10; y++) for(int x=0; x<19; x++) dists[y][x] = -1;
+  std::vector<MSNode> q; q.push_back({startX, startY}); dists[startY][startX] = 0;
+  bool found = false; int head = 0;
+  while(head < (int)q.size()) {
+    MSNode curr = q[head++];
+    if(curr.x == targetX && curr.y == targetY) { found = true; break; }
+    int dx[]={0,0,1,-1}, dy[]={1,-1,0,0};
+    for(int i=0; i<4; i++) {
+      int nx=curr.x+dx[i], ny=curr.y+dy[i];
+      if(nx>=0&&nx<19&&ny>=0&&ny<10 && tankMap[ny][nx]==0 && dists[ny][nx]==-1) {
+        dists[ny][nx] = dists[curr.y][curr.x]+1; q.push_back({nx, ny});
+      }
+    }
+  }
+  if(found) {
+    int cx = targetX, cy = targetY;
+    while(dists[cy][cx] > 1) {
+      int dx[]={0,0,1,-1}, dy[]={1,-1,0,0};
+      for(int i=0; i<4; i++) {
+        int nx=cx+dx[i], ny=cy+dy[i];
+        if(nx>=0&&nx<19&&ny>=0&&ny<10 && dists[ny][nx] == dists[cy][cx]-1) { cx=nx; cy=ny; break; }
+      }
+    }
+    aiTank.angle = atan2(cy + 0.5f - aiTank.y, cx + 0.5f - aiTank.x); }
 }
 
 float gameDist(float x1, float y1, float x2, float y2) { return sqrt(pow(x1-x2, 2) + pow(y1-y2, 2)); }
@@ -3273,7 +3299,7 @@ void handleTank() {
 
   uint32_t now = millis();
   if(now - tankGameT < 30) return;
-  tankGameT = now;
+  tankGameT = now; if(tankShake > 0) tankShake--;
 
   // Player input
   if(btnHeld(B_UP)) {
@@ -3294,6 +3320,9 @@ void handleTank() {
   }
 
   tankBFS();
+  float nax = aiTank.x + cos(aiTank.angle)*0.04f;
+  float nay = aiTank.y + sin(aiTank.angle)*0.04f;
+  if(tankMap[(int)nay][(int)nax] == 0) { aiTank.x = nax; aiTank.y = nay; }
   if(random(100) < 3 && now - aiTank.lastShot > 1500) { bullets.push_back({aiTank.x, aiTank.y, cos(aiTank.angle)*0.2f, sin(aiTank.angle)*0.2f, true, 3, now}); aiTank.lastShot = now; }
   for(auto& b : bullets) {
     if(!b.active) continue;
@@ -3307,8 +3336,8 @@ void handleTank() {
       } else b.active = false;
     }
     // Check hit
-    if(gameDist(b.x, b.y, playerTank.x, playerTank.y) < 0.5f) { playerTank.hp--; b.active = false; ledSet(255,0,0); ledPulse(200); }
-    if(gameDist(b.x, b.y, aiTank.x, aiTank.y) < 0.5f) { aiTank.hp--; b.active = false; ledSet(255,255,255); ledPulse(200); }
+    if(gameDist(b.x, b.y, playerTank.x, playerTank.y) < 0.5f) { playerTank.hp--; b.active = false; tankShake = 5; ledSet(255,0,0); ledPulse(200); }
+    if(gameDist(b.x, b.y, aiTank.x, aiTank.y) < 0.5f) { aiTank.hp--; b.active = false; tankShake = 5; ledSet(255,255,255); ledPulse(200); }
   }
 
   if(playerTank.hp <= 0 || aiTank.hp <= 0) tankGameOver = true;
