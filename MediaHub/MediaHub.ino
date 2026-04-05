@@ -397,7 +397,7 @@ enum AppState {
   ST_GAME_MENU, ST_TICTACTOE_MODE, ST_TICTACTOE, ST_TICTACTOE_OVER,
   ST_TANK_MODE, ST_TANK, ST_TANK_OVER,
   ST_FLAPPY_MODE, ST_FLAPPY, ST_FLAPPY_OVER,
-  ST_MINESWEEPER_SIZE, ST_MINESWEEPER, ST_MINESWEEPER_OVER, ST_PACMAN_MODE, ST_PACMAN, ST_PACMAN_OVER, ST_DOODLE_MODE, ST_DOODLE, ST_DOODLE_OVER
+  ST_MINESWEEPER_SIZE, ST_MINESWEEPER, ST_MINESWEEPER_OVER, ST_PACMAN_MODE, ST_PACMAN, ST_PACMAN_OVER, ST_DOODLE_MODE, ST_DOODLE, ST_DOODLE_OVER, ST_MEMORY_MODE, ST_MEMORY, ST_MEMORY_OVER, ST_SIMON_MODE, ST_SIMON, ST_SIMON_OVER, ST_SUDOKU_MODE, ST_SUDOKU, ST_SUDOKU_OVER
 };
 static AppState appState = ST_SPLASH;
 
@@ -858,8 +858,8 @@ static int      textScrollY=0;
 // ════════════════════════════════════════════════════════════════
 // GAMES GLOBAL
 static int gameMenuSel = 0;
-const char* gameList[] = {"TIC TAC TOE", "TANK BATTLE", "FLAPPY BIRD", "MINESWEEPER", "PAC-MAN", "DOODLE JUMP"};
-const char* gameSub[]  = {"Ultimate 5x5", "Grid Combat", "Classic Bird", "Grid Reveal", "Maze Run", "Endless Jump"};
+const char* gameList[] = {"TIC TAC TOE", "TANK BATTLE", "FLAPPY BIRD", "MINESWEEPER", "PAC-MAN", "DOODLE JUMP", "MEMORY MATCH", "SIMON NUMERIC", "SUDOKU"};
+const char* gameSub[]  = {"Ultimate 5x5", "Grid Combat", "Classic Bird", "Grid Reveal", "Maze Run", "Endless Jump", "Find Pairs", "Remember Numbers", "Logic Puzzle"};
 
 
 static int menuSel = 0;
@@ -2588,7 +2588,7 @@ void loop() {
       mainBuf.setCursor((SCR_W-tw2)/2,SCR_H/2-5); mainBuf.print(msg);
       pushFrame(); ledSet(0,0,0); delay(300);
       _barPulseT = millis();
-      if(appState >= ST_GAME_MENU && appState <= ST_DOODLE_OVER) { if(appState == ST_GAME_MENU) appState = ST_MENU; else appState = ST_GAME_MENU; } else appState = ST_MENU; textScrollY=0; if(appState==ST_MENU) drawMenu(); else if(appState==ST_GAME_MENU) drawGameMenu(); pushFrame(); btnFlushAll(); return;
+      if(appState >= ST_GAME_MENU && appState <= ST_SUDOKU_OVER) { if(appState == ST_GAME_MENU) appState = ST_MENU; else appState = ST_GAME_MENU; } else appState = ST_MENU; textScrollY=0; if(appState==ST_MENU) drawMenu(); else if(appState==ST_GAME_MENU) drawGameMenu(); pushFrame(); btnFlushAll(); return;
     }
   }
 
@@ -2909,8 +2909,8 @@ void loop() {
       ledPulse(1500); break;
 
     case ST_GAME_MENU:
-      if(btnPressed(B_UP)){gameMenuSel=(gameMenuSel+5)%6; drawGameMenu(); pushFrame();}
-      if(btnPressed(B_DW)){gameMenuSel=(gameMenuSel+1)%6; drawGameMenu(); pushFrame();}
+      if(btnPressed(B_UP)){gameMenuSel=(gameMenuSel+8)%9; drawGameMenu(); pushFrame();}
+      if(btnPressed(B_DW)){gameMenuSel=(gameMenuSel+1)%9; drawGameMenu(); pushFrame();}
       if(btnPressed(B_SEL)){
         if(gameMenuSel==0) appState=ST_TICTACTOE_MODE;
         else if(gameMenuSel==1) appState=ST_TANK_MODE;
@@ -2918,6 +2918,9 @@ void loop() {
         else if(gameMenuSel==3) appState=ST_MINESWEEPER_SIZE;
         else if(gameMenuSel==4) appState=ST_PACMAN_MODE;
         else if(gameMenuSel==5) appState=ST_DOODLE_MODE;
+        else if(gameMenuSel==6) appState=ST_MEMORY_MODE;
+        else if(gameMenuSel==7) appState=ST_SIMON_MODE;
+        else if(gameMenuSel==8) appState=ST_SUDOKU_MODE;
         btnFlushAll();
       }
       drawGameMenu(); pushFrame(); break;
@@ -2960,14 +2963,23 @@ void loop() {
       handleDoodle(); break;
     case ST_DOODLE_OVER:
       drawDoodle(); pushFrame(); if(btnPressed(B_SEL)){ doodleInit(); appState=ST_DOODLE; } break;
+    case ST_MEMORY_MODE: memoInit(); appState=ST_MEMORY; break;
+    case ST_MEMORY: handleMemory(); break;
+    case ST_MEMORY_OVER: drawMemory(); pushFrame(); if(btnPressed(B_SEL)) memoInit(); break;
+    case ST_SIMON_MODE: simonInit(); appState=ST_SIMON; break;
+    case ST_SIMON: handleSimon(); break;
+    case ST_SIMON_OVER: drawSimon(); pushFrame(); if(btnPressed(B_SEL)) simonInit(); break;
+    case ST_SUDOKU_MODE: sudokuInit(); appState=ST_SUDOKU; break;
+    case ST_SUDOKU: handleSudoku(); break;
+    case ST_SUDOKU_OVER: drawSudoku(); pushFrame(); if(btnPressed(B_SEL)) sudokuInit(); break;
   }
 
   delay(4);
 }
 void drawGameMenu() {
-  mainBuf.fillScreen(C_BG); uiHeader("6 MINI GAMES");
+  mainBuf.fillScreen(C_BG); uiHeader("9 MINI GAMES");
   const int ITEM_H = 32, GAP = 4;
-  int startIdx = max(0, min(2, gameMenuSel-2));
+  int startIdx = max(0, min(5, gameMenuSel-2));
   for(int i=startIdx; i<startIdx+4; i++) {
     bool sel = (i == gameMenuSel);
     int y = 32 + (i-startIdx) * (ITEM_H + GAP);
@@ -3787,4 +3799,243 @@ void handleDoodle() {
   if(doodleY - doodleCamY > 100) { doodleGameOver = true; ledSet(255, 0, 0); ledPulse(500); }
 
   drawDoodle(); pushFrame();
+}
+
+// MEMORY MATCH
+static int memoGrid[18];
+static bool memoRevealed[18];
+static int memoSelX = 0, memoSelY = 0;
+static int memoFirstIdx = -1, memoSecondIdx = -1;
+static uint32_t memoWaitT = 0;
+static int memoMatches = 0;
+static bool memoGameOver = false;
+
+void memoInit() {
+  std::vector<int> cards;
+  for(int i=0; i<9; i++) { cards.push_back(i); cards.push_back(i); }
+  std::random_shuffle(cards.begin(), cards.end());
+  for(int i=0; i<18; i++) { memoGrid[i] = cards[i]; memoRevealed[i] = false; }
+  memoSelX = 0; memoSelY = 0; memoFirstIdx = -1; memoSecondIdx = -1;
+  memoWaitT = 0; memoMatches = 0; memoGameOver = false;
+}
+
+void drawMemory() {
+  mainBuf.fillScreen(C_BG); uiHeader("MEMORY MATCH");
+  const int CW = 40, CH = 35, GAP = 6;
+  const int OFF_X = (SCR_W - (6*CW + 5*GAP))/2;
+  const int OFF_Y = 25;
+
+  for(int i=0; i<18; i++) {
+    int x = i % 6, y = i / 6;
+    int tx = OFF_X + x*(CW+GAP), ty = OFF_Y + y*(CH+GAP);
+    bool sel = (x == memoSelX && y == memoSelY);
+
+    if(memoRevealed[i] || i == memoFirstIdx || i == memoSecondIdx) {
+      mainBuf.fillRoundRect(tx, ty, CW, CH, 4, C_CARD);
+      mainBuf.setTextColor(C_WHITE); mainBuf.setFont(&fonts::Font4);
+      mainBuf.drawCentreString(String(memoGrid[i]).c_str(), tx+CW/2, ty+CH/2-10);
+    } else {
+      mainBuf.fillRoundRect(tx, ty, CW, CH, 4, C_SURFACE);
+      mainBuf.drawRoundRect(tx, ty, CW, CH, 4, C_BORDER);
+    }
+    if(sel) mainBuf.drawRoundRect(tx-2, ty-2, CW+4, CH+4, 6, C_WHITE);
+  }
+
+  if(memoGameOver) uiCenteredText("EXCELLENT!", SCR_H/2, C_WHITE, &fonts::Font4);
+  uiFooter(memoGameOver ? "SEL: Restart  L+R: Back" : "UP/DW/L/R: Move  SEL: Flip");
+}
+
+void handleMemory() {
+  if(memoGameOver) {
+    if(btnPressed(B_SEL)) { memoInit(); drawMemory(); pushFrame(); }
+    return;
+  }
+  if(memoWaitT > 0 && millis() > memoWaitT) {
+    if(memoGrid[memoFirstIdx] != memoGrid[memoSecondIdx]) {
+      memoRevealed[memoFirstIdx] = memoRevealed[memoSecondIdx] = false;
+    } else {
+      memoMatches++;
+      if(memoMatches == 9) memoGameOver = true;
+    }
+    memoFirstIdx = memoSecondIdx = -1;
+    memoWaitT = 0;
+    drawMemory(); pushFrame(); return;
+  }
+  if(memoWaitT > 0) return;
+
+  bool changed = false;
+  if(btnPressed(B_UP)) { memoSelY = (memoSelY + 2) % 3; changed = true; }
+  if(btnPressed(B_DW)) { memoSelY = (memoSelY + 1) % 3; changed = true; }
+  if(btnPressed(B_L))  { memoSelX = (memoSelX + 5) % 6; changed = true; }
+  if(btnPressed(B_R))  { memoSelX = (memoSelX + 1) % 6; changed = true; }
+
+  if(btnPressed(B_SEL)) {
+    int idx = memoSelY * 6 + memoSelX;
+    if(!memoRevealed[idx] && idx != memoFirstIdx) {
+      if(memoFirstIdx == -1) memoFirstIdx = idx;
+      else {
+        memoSecondIdx = idx;
+        memoWaitT = millis() + 800;
+      }
+      changed = true;
+    }
+  }
+  if(changed) { drawMemory(); pushFrame(); }
+}
+
+// SIMON NUMERIC
+static std::vector<int> simonSeq;
+static int simonStep = 0;
+static bool simonPlayback = true;
+static uint32_t simonNextT = 0;
+static int simonShowIdx = -1;
+static bool simonGameOver = false;
+
+void simonInit() {
+  simonSeq.clear(); simonSeq.push_back(random(1, 5));
+  simonStep = 0; simonPlayback = true; simonNextT = millis() + 1000;
+  simonShowIdx = -1; simonGameOver = false;
+}
+
+void drawSimon() {
+  mainBuf.fillScreen(C_BG); uiHeader("SIMON NUMERIC");
+  const int SZ = 50, GAP = 10;
+  int OFF_X = (SCR_W - (2*SZ + GAP))/2;
+  int OFF_Y = 40;
+
+  int highlights[] = {0,0,0,0,0};
+  if(simonShowIdx != -1) highlights[simonSeq[simonShowIdx]] = 1;
+
+  auto drawBtn = [&](int id, int x, int y, uint16_t color, const char* txt) {
+    mainBuf.fillRoundRect(x, y, SZ, SZ, 8, highlights[id] ? color : C_XDGRAY);
+    mainBuf.setTextColor(highlights[id] ? C_BLACK : C_WHITE);
+    mainBuf.setFont(&fonts::Font4);
+    mainBuf.drawCentreString(txt, x+SZ/2, y+SZ/2-10);
+  };
+
+  drawBtn(1, OFF_X, OFF_Y, C_WHITE, "1");       // UP
+  drawBtn(2, OFF_X+SZ+GAP, OFF_Y, C_WHITE, "2"); // DW
+  drawBtn(3, OFF_X, OFF_Y+SZ+GAP, C_WHITE, "3"); // L
+  drawBtn(4, OFF_X+SZ+GAP, OFF_Y+SZ+GAP, C_WHITE, "4"); // R
+
+  char buf[32]; snprintf(buf, sizeof(buf), "LEVEL: %d", (int)simonSeq.size());
+  uiFooter(buf);
+
+  if(simonGameOver) uiCenteredText("GAME OVER!", SCR_H/2, C_WHITE, &fonts::Font4);
+  else if(simonPlayback) uiCenteredText("WATCH...", 35, C_WHITE, &fonts::Font2);
+  else uiCenteredText("YOUR TURN!", 35, C_ACCENT_INFO, &fonts::Font2);
+}
+
+void handleSimon() {
+  if(simonGameOver) {
+    if(btnPressed(B_SEL)) { simonInit(); drawSimon(); pushFrame(); }
+    return;
+  }
+
+  if(simonPlayback) {
+    if(millis() > simonNextT) {
+      if(simonShowIdx == -1) {
+        simonShowIdx = simonStep;
+        simonNextT = millis() + 600;
+      } else {
+        simonShowIdx = -1;
+        simonStep++;
+        if(simonStep >= (int)simonSeq.size()) {
+          simonPlayback = false; simonStep = 0;
+        }
+        simonNextT = millis() + 200;
+      }
+      drawSimon(); pushFrame();
+    }
+    return;
+  }
+
+  int input = 0;
+  if(btnPressed(B_UP)) input = 1;
+  if(btnPressed(B_DW)) input = 2;
+  if(btnPressed(B_L))  input = 3;
+  if(btnPressed(B_R))  input = 4;
+
+  if(input > 0) {
+    if(input == simonSeq[simonStep]) {
+      simonStep++;
+      ledSet(0, 100, 0); ledPulse(100);
+      if(simonStep >= (int)simonSeq.size()) {
+        simonSeq.push_back(random(1, 5));
+        simonStep = 0; simonPlayback = true; simonNextT = millis() + 1000;
+      }
+    } else {
+      simonGameOver = true; ledSet(255, 0, 0); ledPulse(500);
+    }
+    drawSimon(); pushFrame();
+  }
+}
+
+// SUDOKU
+static int sudoGrid[9][9];
+static bool sudoFixed[9][9];
+static int sudoCurX = 0, sudoCurY = 0;
+static bool sudoWin = false;
+
+void sudoInit() {
+  // Simple pattern-based Sudoku for demo
+  int base[9][9] = {
+    {5,3,4,6,7,8,9,1,2},{6,7,2,1,9,5,3,4,8},{1,9,8,3,4,2,5,6,7},
+    {8,5,9,7,6,1,4,2,3},{4,2,6,8,5,3,7,9,1},{7,1,3,9,2,4,8,5,6},
+    {9,6,1,5,3,7,2,8,4},{2,8,7,4,1,9,6,3,5},{3,4,5,2,8,6,1,7,9}
+  };
+  for(int y=0;y<9;y++) {
+    for(int x=0;x<9;x++) {
+      sudoGrid[y][x] = (random(100) < 35) ? base[y][x] : 0;
+      sudoFixed[y][x] = (sudoGrid[y][x] != 0);
+    }
+  }
+  sudoCurX = 4; sudoCurY = 4; sudoWin = false;
+}
+
+void drawSudoku() {
+  mainBuf.fillScreen(C_BG); uiHeader("SUDOKU");
+  const int S = 14;
+  const int OFF_X = (SCR_W - 9*S)/2;
+  const int OFF_Y = 25;
+
+  for(int y=0; y<9; y++) {
+    for(int x=0; x<9; x++) {
+      int tx = OFF_X + x*S, ty = OFF_Y + y*S;
+      mainBuf.drawRect(tx, ty, S+1, S+1, C_DGRAY);
+      if(sudoGrid[y][x] != 0) {
+        mainBuf.setTextColor(sudoFixed[y][x] ? C_WHITE : C_ACCENT_INFO);
+        mainBuf.setFont(&fonts::Font2);
+        mainBuf.setCursor(tx+5, ty+1); mainBuf.print(sudoGrid[y][x]);
+      }
+      if(x == sudoCurX && y == sudoCurY) mainBuf.drawRect(tx+1, ty+1, S-1, S-1, C_WHITE);
+    }
+  }
+  // Bold lines for 3x3
+  for(int i=0; i<=9; i+=3) {
+    mainBuf.drawFastVLine(OFF_X+i*S, OFF_Y, 9*S, C_WHITE);
+    mainBuf.drawFastHLine(OFF_X, OFF_Y+i*S, 9*S, C_WHITE);
+  }
+
+  if(sudoWin) uiCenteredText("SOLVED!", 100, C_ACCENT_FUN, &fonts::Font4);
+  uiFooter("UP/DW/L/R: Nav  SEL: Inc Num");
+}
+
+void handleSudoku() {
+  if(sudoWin) { if(btnPressed(B_SEL)) sudoInit(); return; }
+  bool changed = false;
+  if(btnPressed(B_UP)) { sudoCurY = (sudoCurY + 8) % 9; changed = true; }
+  if(btnPressed(B_DW)) { sudoCurY = (sudoCurY + 1) % 9; changed = true; }
+  if(btnPressed(B_L))  { sudoCurX = (sudoCurX + 8) % 9; changed = true; }
+  if(btnPressed(B_R))  { sudoCurX = (sudoCurX + 1) % 9; changed = true; }
+
+  if(btnPressed(B_SEL) && !sudoFixed[sudoCurY][sudoCurX]) {
+    sudoGrid[sudoCurY][sudoCurX] = (sudoGrid[sudoCurY][sudoCurX] + 1) % 10;
+    changed = true;
+    // Simple check win (could be more robust)
+    bool full = true;
+    for(int y=0;y<9;y++) for(int x=0;x<9;x++) if(sudoGrid[y][x]==0) full=false;
+    if(full) sudoWin = true;
+  }
+  if(changed) { drawSudoku(); pushFrame(); }
 }
