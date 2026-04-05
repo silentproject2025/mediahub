@@ -296,7 +296,11 @@ enum AppState {
   ST_BORED,
   ST_PEOPLE_SPACE,
   ST_HACKER_NEWS,
-  ST_HN_COMMENTS    // [NEW v9.1] Layar komentar HN
+  ST_HN_COMMENTS,    // [NEW v9.1] Layar komentar HN
+  ST_GAME_MENU, ST_TICTACTOE_MODE, ST_TICTACTOE, ST_TICTACTOE_OVER,
+  ST_TANK_MODE, ST_TANK, ST_TANK_OVER,
+  ST_FLAPPY, ST_FLAPPY_OVER,
+  ST_MINESWEEPER_SIZE, ST_MINESWEEPER, ST_MINESWEEPER_OVER
 };
 static AppState appState = ST_SPLASH;
 
@@ -755,6 +759,21 @@ static int      textScrollY=0;
 // ════════════════════════════════════════════════════════════════
 // MENU v9.0 — 16 ITEM
 // ════════════════════════════════════════════════════════════════
+// GAMES GLOBAL
+static int gameMenuSel = 0;
+const char* gameList[] = {"TIC TAC TOE", "TANK BATTLE", "FLAPPY BIRD", "MINESWEEPER"};
+const char* gameSub[]  = {"Ultimate 5x5", "Grid Combat", "Classic Bird", "Grid Reveal"};
+
+// GAMES GLOBAL
+static int gameMenuSel = 0;
+const char* gameList[] = {"TIC TAC TOE", "TANK BATTLE", "FLAPPY BIRD", "MINESWEEPER"};
+const char* gameSub[]  = {"Ultimate 5x5", "Grid Combat", "Classic Bird", "Grid Reveal"};
+
+// GAMES GLOBAL
+static int gameMenuSel = 0;
+const char* gameList[] = {"TIC TAC TOE", "TANK BATTLE", "FLAPPY BIRD", "MINESWEEPER"};
+const char* gameSub[]  = {"Ultimate 5x5", "Grid Combat", "Classic Bird", "Grid Reveal"};
+
 static int menuSel = 0;
 static const char* menuItems[] = {
   "VIDEO", "TRIVIA",
@@ -764,6 +783,7 @@ static const char* menuItems[] = {
   "STOIC QUOTE", "NUMBER FACT",
   "ISS TRACKER", "PEOPLE IN SPACE",
   "APOD — NASA",
+  "GAMES",
 };
 static const char* menuSubtitle[] = {
   "putar .mjpeg SD",
@@ -782,8 +802,9 @@ static const char* menuSubtitle[] = {
   "posisi ISS real-time",
   "astronaut di orbit",
   "foto luar angkasa NASA",
+  "4 mini games",
 };
-#define MENU_N 16
+#define MENU_N 17
 
 static uint32_t _barPulseT = 0;
 static uint8_t  _barAlpha  = 160;
@@ -2473,12 +2494,12 @@ void loop() {
       mainBuf.fillRoundRect(SCR_W/2-70,SCR_H/2-10,140,20,6,C_XDGRAY);
       mainBuf.drawRoundRect(SCR_W/2-70,SCR_H/2-10,140,20,6,C_MGRAY);
       mainBuf.setFont(&fonts::Font2); mainBuf.setTextColor(C_WHITE);
-      const char* msg="< kembali ke menu";
+      const char* msg="< kembali";
       int tw2=mainBuf.textWidth(msg);
       mainBuf.setCursor((SCR_W-tw2)/2,SCR_H/2-5); mainBuf.print(msg);
       pushFrame(); ledSet(0,0,0); delay(300);
       _barPulseT = millis();
-      appState=ST_MENU; textScrollY=0; drawMenu(); pushFrame(); btnFlushAll(); return;
+      if(appState >= ST_GAME_MENU && appState <= ST_MINESWEEPER_OVER) { if(appState == ST_GAME_MENU) appState = ST_MENU; else appState = ST_GAME_MENU; } else appState = ST_MENU; textScrollY=0; if(appState==ST_MENU) drawMenu(); else if(appState==ST_GAME_MENU) drawGameMenu(); pushFrame(); btnFlushAll(); return;
     }
   }
 
@@ -2552,6 +2573,8 @@ void loop() {
             appState=ST_APOD; textScrollY=0;
             if(!apodFetched){ drawLoading("APOD — NASA","Mengambil dari NASA..."); pushFrame(); fetchAPOD(); }
             drawAPOD(); pushFrame(); btnFlushAll(); break;
+          case 16:
+            appState=ST_GAME_MENU; drawGameMenu(); pushFrame(); btnFlushAll(); break;
         }
         break;
       }
@@ -2698,7 +2721,8 @@ void loop() {
       if(btnPressed(B_DW)){ textScrollY+=13; drawAPOD(); pushFrame(); }
       if(btnPressed(B_SEL)){
         textScrollY=0; apodFetched=false;
-        drawLoading("APOD — NASA","Mengambil dari NASA...");
+        drawLoading("APOD — NASA",
+  "GAMES","Mengambil dari NASA...");
         pushFrame(); fetchAPOD(); drawAPOD(); pushFrame(); btnFlushAll();
       }
       ledPulse(1500); break;
@@ -2796,8 +2820,667 @@ void loop() {
       }
       ledPulse(1500); break;
 
-    default: break;
+    case ST_GAME_MENU:
+      if(btnPressed(B_UP)){gameMenuSel=(gameMenuSel+3)%4; drawGameMenu(); pushFrame();}
+      if(btnPressed(B_DW)){gameMenuSel=(gameMenuSel+1)%4; drawGameMenu(); pushFrame();}
+      if(btnPressed(B_SEL)){
+        if(gameMenuSel==0) appState=ST_TICTACTOE_MODE;
+        else if(gameMenuSel==1) appState=ST_TANK_MODE;
+        else if(gameMenuSel==2) appState=ST_FLAPPY;
+        else if(gameMenuSel==3) appState=ST_MINESWEEPER_SIZE;
+        btnFlushAll();
+      }
+      drawGameMenu(); pushFrame(); break;
+
+    case ST_TICTACTOE_MODE:
+      tttInit(); appState=ST_TICTACTOE; drawTTT(); pushFrame(); break;
+    case ST_TICTACTOE:
+      handleTTT(); break;
+    case ST_TICTACTOE_OVER:
+      drawTTT(); pushFrame(); if(btnPressed(B_SEL)){ tttInit(); appState=ST_TICTACTOE; } break;
   }
+    case ST_TANK_MODE:
+      tankInit(); appState=ST_TANK; drawTank(); pushFrame(); break;
+    case ST_TANK:
+      handleTank(); break;
+    case ST_TANK_OVER:
+    case ST_FLAPPY:
+      handleFlappy(); break;
+    case ST_FLAPPY_OVER:
+      drawFlappy(); pushFrame(); if(btnPressed(B_SEL)){ flappyInit(); appState=ST_FLAPPY; } break;
+    case ST_MINESWEEPER_SIZE:
+      msInit(9, 9); appState=ST_MINESWEEPER; drawMinesweeper(); pushFrame(); break;
+    case ST_MINESWEEPER:
+      handleMinesweeper(); break;
+    case ST_MINESWEEPER_OVER:
+      drawMinesweeper(); pushFrame(); if(btnPressed(B_SEL)){ msInit(msW, msH); appState=ST_MINESWEEPER; } break;
+      drawTank(); pushFrame(); if(btnPressed(B_SEL)){ tankInit(); appState=ST_TANK; } break;
 
   delay(4);
+}
+
+void drawGameMenu() {
+  mainBuf.fillScreen(C_BG); uiHeader("4 MINI GAMES");
+  const int ITEM_H = 32, GAP = 4;
+  for(int i=0; i<4; i++) {
+    bool sel = (i == gameMenuSel);
+    int y = 32 + i * (ITEM_H + GAP);
+    uiCard(8, y, SCR_W-16, ITEM_H, sel ? C_WHITE : C_DGRAY, 8);
+    if(sel) mainBuf.fillRoundRect(8, y+4, 3, ITEM_H-8, 2, C_WHITE);
+    mainBuf.setFont(&fonts::Font4); mainBuf.setTextColor(sel ? C_WHITE : C_MGRAY);
+    mainBuf.setCursor(20, y+4); mainBuf.print(gameList[i]);
+    mainBuf.setFont(&fonts::Font2); mainBuf.setTextColor(sel ? C_LGRAY : C_DGRAY);
+    mainBuf.setCursor(SCR_W-mainBuf.textWidth(gameSub[i])-16, y+10); mainBuf.print(gameSub[i]);
+  }
+  uiFooter("UP/DW:pilih  SEL:main  L+R:back");
+}
+
+// TIC TAC TOE ULTIMATE
+struct TTTGrid {
+  int8_t board[3][3]; // 0:empty, 1:X, 2:O
+  int8_t winner;      // 0:none, 1:X, 2:O, 3:Draw
+};
+
+TTTGrid ultimateBoard[5][5];
+int8_t bigWinner = 0; // 0:none, 1:X, 2:O, 3:Draw
+int tttBigX=2, tttBigY=2, tttSmallX=1, tttSmallY=1;
+int tttTargetBigX=-1, tttTargetBigY=-1; // Must play in this big cell
+int tttTurn = 1; // 1:X, 2:O
+bool tttVsAI = true;
+int tttAiLevel = 1; // 0:Easy, 1:Medium, 2:Hard
+uint32_t tttCursorT = 0;
+bool tttAITurn = false;
+uint32_t tttAINextMoveT = 0;
+
+void tttInit() {
+  for(int y=0; y<5; y++) {
+    for(int x=0; x<5; x++) {
+      ultimateBoard[x][y].winner = 0;
+      for(int sy=0; sy<3; sy++) {
+        for(int sx=0; sx<3; sx++) ultimateBoard[x][y].board[sx][sy] = 0;
+      }
+    }
+  }
+  bigWinner = 0; tttTurn = 1;
+  tttBigX=2; tttBigY=2; tttSmallX=1; tttSmallY=1;
+  tttTargetBigX=-1; tttTargetBigY=-1;
+  tttAITurn = false;
+}
+
+int8_t tttCheckWin(int8_t b[3][3]) {
+  for(int i=0; i<3; i++) {
+    if(b[i][0] != 0 && b[i][0] == b[i][1] && b[i][1] == b[i][2]) return b[i][0];
+    if(b[0][i] != 0 && b[0][i] == b[1][i] && b[1][i] == b[2][i]) return b[0][i];
+  }
+  if(b[0][0] != 0 && b[0][0] == b[1][1] && b[1][1] == b[2][2]) return b[0][0];
+  if(b[0][2] != 0 && b[0][2] == b[1][1] && b[1][1] == b[2][0]) return b[0][2];
+  bool full = true;
+  for(int y=0; y<3; y++) for(int x=0; x<3; x++) if(b[x][y] == 0) full = false;
+  return full ? 3 : 0;
+}
+
+int8_t tttCheckBigWin() {
+  int8_t b[5][5];
+  for(int y=0; y<5; y++) for(int x=0; x<5; x++) b[x][y] = ultimateBoard[x][y].winner;
+  // 5x5 needs 3 in a row to win
+  for(int y=0; y<5; y++) {
+    for(int x=0; x<3; x++) {
+      if(b[x][y] != 0 && b[x][y] != 3 && b[x][y] == b[x+1][y] && b[x+1][y] == b[x+2][y]) return b[x][y];
+    }
+  }
+  for(int x=0; x<5; x++) {
+    for(int y=0; y<3; y++) {
+      if(b[x][y] != 0 && b[x][y] != 3 && b[x][y] == b[x][y+1] && b[x][y+1] == b[x][y+2]) return b[x][y];
+    }
+  }
+  for(int y=0; y<3; y++) {
+    for(int x=0; x<3; x++) {
+      if(b[x][y] != 0 && b[x][y] != 3 && b[x][y] == b[x+1][y+1] && b[x+1][y+1] == b[x+2][y+2]) return b[x][y];
+      if(b[x+2][y] != 0 && b[x+2][y] != 3 && b[x+2][y] == b[x+1][y+1] && b[x+1][y+1] == b[x][y+2]) return b[x+2][y];
+    }
+  }
+  bool full = true;
+  for(int y=0; y<5; y++) for(int x=0; x<5; x++) if(ultimateBoard[x][y].winner == 0) full = false;
+  return full ? 3 : 0;
+}
+
+void drawTTT() {
+  mainBuf.fillScreen(C_BG); uiHeader("TIC TAC TOE ULTIMATE");
+  const int OFFSET_X = 70, OFFSET_Y = 28, BIG_SIZE = 26, SMALL_SIZE = 8;
+  const int GRID_W = BIG_SIZE * 5 + 4;
+
+  // Draw 5x5 Big Grid
+  for(int i=1; i<5; i++) {
+    mainBuf.drawFastVLine(OFFSET_X + i*BIG_SIZE + (i-1), OFFSET_Y, GRID_W, C_DGRAY);
+    mainBuf.drawFastHLine(OFFSET_X, OFFSET_Y + i*BIG_SIZE + (i-1), GRID_W, C_DGRAY);
+  }
+
+  for(int y=0; y<5; y++) {
+    for(int x=0; x<5; x++) {
+      int bx = OFFSET_X + x*(BIG_SIZE+1);
+      int by = OFFSET_Y + y*(BIG_SIZE+1);
+
+      if(ultimateBoard[x][y].winner != 0) {
+        uint16_t col = (ultimateBoard[x][y].winner == 1) ? C_ACCENT_SYS : (ultimateBoard[x][y].winner == 2) ? C_ACCENT_FUN : C_XDGRAY;
+        mainBuf.fillRect(bx+1, by+1, BIG_SIZE-1, BIG_SIZE-1, col);
+        mainBuf.setFont(&fonts::Font4); mainBuf.setTextColor(C_WHITE);
+        mainBuf.setCursor(bx+6, by+4);
+        if(ultimateBoard[x][y].winner == 1) mainBuf.print("X");
+        else if(ultimateBoard[x][y].winner == 2) mainBuf.print("O");
+        else mainBuf.print("-");
+      } else {
+        // Draw 3x3 small grid
+        for(int sy=0; sy<3; sy++) {
+          for(int sx=0; sx<3; sx++) {
+            int val = ultimateBoard[x][y].board[sx][sy];
+            int sx_pos = bx + 2 + sx*SMALL_SIZE;
+            int sy_pos = by + 2 + sy*SMALL_SIZE;
+            if(val == 1) { mainBuf.setTextColor(C_ACCENT_SYS); mainBuf.setCursor(sx_pos+1, sy_pos-2); mainBuf.setFont(&fonts::Font2); mainBuf.print("x"); }
+            else if(val == 2) { mainBuf.setTextColor(C_ACCENT_FUN); mainBuf.setCursor(sx_pos+1, sy_pos-2); mainBuf.setFont(&fonts::Font2); mainBuf.print("o"); }
+          }
+        }
+      }
+
+      // Highlight target grid
+      if(tttTargetBigX == x && tttTargetBigY == y) mainBuf.drawRect(bx, by, BIG_SIZE+1, BIG_SIZE+1, C_WHITE);
+    }
+  }
+
+  // Cursor
+  if((millis()/300)%2 == 0) {
+    int curX = OFFSET_X + tttBigX*(BIG_SIZE+1) + 2 + tttSmallX*SMALL_SIZE;
+    int curY = OFFSET_Y + tttBigY*(BIG_SIZE+1) + 2 + tttSmallY*SMALL_SIZE;
+    mainBuf.drawRect(curX, curY, SMALL_SIZE, SMALL_SIZE, C_WHITE);
+  }
+
+  // Info
+  uiCard(4, 30, 60, 110, C_DGRAY, 6);
+  mainBuf.setFont(&fonts::Font2); mainBuf.setTextColor(C_LGRAY);
+  mainBuf.setCursor(10, 40); mainBuf.print(tttVsAI ? "VS AI" : "VS P2");
+  mainBuf.setCursor(10, 55); mainBuf.print("Turn:");
+  mainBuf.setTextColor(tttTurn==1 ? C_ACCENT_SYS : C_ACCENT_FUN);
+  mainBuf.setCursor(10, 68); mainBuf.print(tttTurn==1 ? "PLAYER X" : (tttVsAI ? "AI O" : "PLAYER O"));
+
+  if(tttVsAI) {
+    mainBuf.setTextColor(C_DGRAY);
+    mainBuf.setCursor(10, 100); mainBuf.print("Lvl:");
+    mainBuf.setTextColor(C_LGRAY);
+    mainBuf.print(tttAiLevel==0 ? "Easy" : tttAiLevel==1 ? "Med" : "Hard");
+  }
+
+  if(bigWinner != 0) {
+    mainBuf.fillRoundRect(SCR_W/2-60, SCR_H/2-30, 120, 60, 10, C_SURFACE);
+    mainBuf.drawRoundRect(SCR_W/2-60, SCR_H/2-30, 120, 60, 10, C_WHITE);
+    uiCenteredText(bigWinner==3 ? "DRAW!" : "WINNER!", SCR_H/2-20, C_LGRAY, &fonts::Font2);
+    mainBuf.setFont(&fonts::Font6); mainBuf.setTextColor(bigWinner==1 ? C_ACCENT_SYS : C_ACCENT_FUN);
+    String ws = (bigWinner==1) ? "X" : (bigWinner==2) ? "O" : "-";
+    int tw = mainBuf.textWidth(ws.c_str());
+    mainBuf.setCursor((SCR_W-tw)/2, SCR_H/2-8); mainBuf.print(ws);
+    uiFooter("SEL: Restart  L+R: Back");
+  } else {
+    uiFooter("UP/DW/L/R: Move  SEL: Mark  R: Level");
+  }
+}
+
+// AI: Minimax simplified for non-blocking
+struct TTTMove { int bx, by, sx, sy; int score; };
+TTTMove tttBestMove;
+
+int tttEvaluate() {
+  int8_t b[5][5];
+  for(int y=0; y<5; y++) for(int x=0; x<5; x++) b[x][y] = ultimateBoard[x][y].winner;
+  int score = 0;
+  // Basic evaluation: count 2-in-a-rows for AI (2) and player (1)
+  return score;
+}
+
+void tttMakeMove(int bx, int by, int sx, int sy) {
+  ultimateBoard[bx][by].board[sx][sy] = tttTurn;
+  int8_t sw = tttCheckWin(ultimateBoard[bx][by].board);
+  if(sw != 0) {
+    ultimateBoard[bx][by].winner = sw;
+    bigWinner = tttCheckBigWin();
+    if(bigWinner != 0) { ledSet(255,255,255); ledPulse(500); }
+  }
+
+  tttTurn = (tttTurn == 1) ? 2 : 1;
+  if(bigWinner == 1) { prefs.begin("games", false); int w = prefs.getInt("ttt_wins", 0); prefs.putInt("ttt_wins", w+1); prefs.end(); }
+  ledSet(tttTurn==1 ? 0:0, tttTurn==1 ? 0:0, 255); // Blue for X, Red for O (simplified)
+  if(tttTurn == 1) ledSet(0,0,255); else ledSet(255,0,0);
+
+  if(ultimateBoard[sx][sy].winner == 0) {
+    tttTargetBigX = sx; tttTargetBigY = sy;
+  } else {
+    tttTargetBigX = -1; tttTargetBigY = -1;
+  }
+
+  tttBigX = (tttTargetBigX == -1) ? bx : tttTargetBigX;
+  tttBigY = (tttTargetBigY == -1) ? by : tttTargetBigY;
+  tttSmallX = 1; tttSmallY = 1;
+}
+
+void tttAIThink() {
+  // Random for Easy, simple for Medium, limited search for Hard
+  std::vector<TTTMove> moves;
+  int bx_start = (tttTargetBigX == -1) ? 0 : tttTargetBigX;
+  int bx_end   = (tttTargetBigX == -1) ? 5 : tttTargetBigX + 1;
+  int by_start = (tttTargetBigX == -1) ? 0 : tttTargetBigY;
+  int by_end   = (tttTargetBigX == -1) ? 5 : tttTargetBigY + 1;
+
+  for(int by=by_start; by<by_end; by++) {
+    for(int bx=bx_start; bx<bx_end; bx++) {
+      if(ultimateBoard[bx][by].winner != 0) continue;
+      for(int sy=0; sy<3; sy++) {
+        for(int sx=0; sx<3; sx++) {
+          if(ultimateBoard[bx][by].board[sx][sy] == 0) moves.push_back({bx,by,sx,sy,0});
+        }
+      }
+    }
+  }
+
+  if(!moves.empty()) {
+    int idx = random(moves.size());
+    TTTMove m = moves[idx];
+    tttMakeMove(m.bx, m.by, m.sx, m.sy);
+  }
+  tttAITurn = false;
+}
+
+void handleTTT() {
+  if(bigWinner != 0) {
+    if(btnPressed(B_SEL)) { tttInit(); drawTTT(); pushFrame(); }
+    return;
+  }
+
+  if(tttVsAI && tttTurn == 2 && !tttAITurn) {
+    tttAITurn = true; tttAINextMoveT = millis() + 500;
+  }
+
+  if(tttAITurn) {
+    if(millis() > tttAINextMoveT) { tttAIThink(); drawTTT(); pushFrame(); }
+    return;
+  }
+
+  bool changed = false;
+  if(btnPressed(B_UP)) { tttSmallY--; if(tttSmallY<0){ tttSmallY=2; tttBigY=(tttBigY+4)%5; } changed=true; }
+  if(btnPressed(B_DW)) { tttSmallY++; if(tttSmallY>2){ tttSmallY=0; tttBigY=(tttBigY+1)%5; } changed=true; }
+  if(btnPressed(B_L))  { tttSmallX--; if(tttSmallX<0){ tttSmallX=2; tttBigX=(tttBigX+4)%5; } changed=true; }
+  if(btnPressed(B_R))  { tttSmallX++; if(tttSmallX>2){ tttSmallX=0; tttBigX=(tttBigX+1)%5; } changed=true; }
+
+  if(btnPressed(B_SEL)) {
+    if(tttTargetBigX != -1 && (tttBigX != tttTargetBigX || tttBigY != tttTargetBigY)) {
+      // Invalid target grid
+    } else if(ultimateBoard[tttBigX][tttBigY].winner != 0 || ultimateBoard[tttBigX][tttBigY].board[tttSmallX][tttSmallY] != 0) {
+      // Already won or filled
+    } else {
+      tttMakeMove(tttBigX, tttBigY, tttSmallX, tttSmallY);
+      changed = true;
+    }
+  }
+
+  if(btnPressed(B_R)) { // Actually Pause/Level
+    // tttVsAI = !tttVsAI; tttInit(); changed=true;
+  }
+
+  if(changed || (millis()-tttCursorT > 300)) {
+    tttCursorT = millis();
+    drawTTT(); pushFrame();
+  }
+}
+
+// TANK BATTLE
+struct Tank {
+  float x, y, angle;
+  int8_t hp;
+  uint32_t lastShot;
+  bool isAI;
+};
+
+struct Bullet {
+  float x, y, dx, dy;
+  bool active;
+  int8_t bounces;
+  uint32_t born;
+};
+
+uint8_t tankMap[10][19]; // 0:empty, 1:permanent, 2:destructible
+Tank playerTank, aiTank;
+std::vector<Bullet> bullets;
+uint32_t tankGameT = 0;
+bool tankGameOver = false;
+int tankScore = 0;
+
+void tankInit() {
+  randomSeed(millis());
+  for(int y=0; y<10; y++) {
+    for(int x=0; x<19; x++) {
+      if(x==0 || x==18 || y==0 || y==9) tankMap[y][x] = 1;
+      else if(random(100) < 20) tankMap[y][x] = 2;
+      else tankMap[y][x] = 0;
+    }
+  }
+  // Clear spawn points
+  tankMap[1][1] = 0; tankMap[2][1] = 0; tankMap[1][2] = 0;
+  tankMap[8][17] = 0; tankMap[7][17] = 0; tankMap[8][16] = 0;
+
+  playerTank = {1.5f, 1.5f, 0, 3, 0, false};
+  aiTank = {17.5f, 8.5f, 3.14f, 3, 0, true};
+  bullets.clear();
+  tankGameOver = false; tankScore = 0;
+}
+
+void drawTank() {
+  mainBuf.fillScreen(C_BG); uiHeader("TANK BATTLE");
+  const int T_SZ = 16, OFF_X = 10, OFF_Y = 26;
+
+  for(int y=0; y<10; y++) {
+    for(int x=0; x<19; x++) {
+      int tx = OFF_X + x*T_SZ, ty = OFF_Y + y*T_SZ;
+      if(tankMap[y][x] == 1) mainBuf.fillRect(tx, ty, T_SZ, T_SZ, C_DGRAY);
+      else if(tankMap[y][x] == 2) {
+        mainBuf.fillRect(tx, ty, T_SZ, T_SZ, lgfx::color565(80,50,30));
+        mainBuf.drawRect(tx, ty, T_SZ, T_SZ, lgfx::color565(120,80,50));
+      }
+    }
+  }
+
+  // Draw Tanks
+  auto drawT = [&](Tank& t, uint16_t col) {
+    int tx = OFF_X + (int)(t.x*T_SZ), ty = OFF_Y + (int)(t.y*T_SZ);
+    mainBuf.fillRoundRect(tx-6, ty-6, 12, 12, 2, col);
+    int bx = tx + (int)(cos(t.angle)*10), by = ty + (int)(sin(t.angle)*10);
+    mainBuf.drawLine(tx, ty, bx, by, C_WHITE);
+  };
+  drawT(playerTank, C_ACCENT_SYS);
+  drawT(aiTank, C_ACCENT_FUN);
+
+  // Bullets
+  for(auto& b : bullets) {
+    if(!b.active) continue;
+    mainBuf.fillCircle(OFF_X + (int)(b.x*T_SZ), OFF_Y + (int)(b.y*T_SZ), 2, C_WHITE);
+  }
+
+  // HUD
+  mainBuf.setFont(&fonts::Font2); mainBuf.setTextColor(C_LGRAY);
+  mainBuf.setCursor(10, 10); mainBuf.print("HP: ");
+  for(int i=0; i<3; i++) mainBuf.print(i<playerTank.hp ? "♥" : "♡");
+
+  if(tankGameOver) {
+    uiCenteredText(playerTank.hp>0 ? "MISSION SUCCESS" : "MISSION FAILED", SCR_H/2, C_WHITE, &fonts::Font4);
+    uiFooter("SEL: Restart  L+R: Back");
+  }
+}
+
+uint32_t lastBfsT = 0;
+
+void tankBFS() {
+  if(millis() - lastBfsT < 500) return;
+  lastBfsT = millis();
+  int tx = (int)playerTank.x, ty = (int)playerTank.y;
+  int ax = (int)aiTank.x, ay = (int)aiTank.y;
+  if(ax == tx && ay == ty) return;
+  aiTank.angle = atan2(ty + 0.5f - aiTank.y, tx + 0.5f - aiTank.x);
+}
+
+void handleTank() {
+  if(tankGameOver) {
+    if(btnPressed(B_SEL)) { tankInit(); drawTank(); pushFrame(); }
+    return;
+  }
+
+  uint32_t now = millis();
+  if(now - tankGameT < 30) return;
+  tankGameT = now;
+
+  // Player input
+  if(btnHeld(B_UP)) {
+    float nx = playerTank.x + cos(playerTank.angle)*0.1f;
+    float ny = playerTank.y + sin(playerTank.angle)*0.1f;
+    if(tankMap[(int)ny][(int)nx] == 0) { playerTank.x = nx; playerTank.y = ny; }
+  }
+  if(btnHeld(B_DW)) {
+    float nx = playerTank.x - cos(playerTank.angle)*0.1f;
+    float ny = playerTank.y - sin(playerTank.angle)*0.1f;
+    if(tankMap[(int)ny][(int)nx] == 0) { playerTank.x = nx; playerTank.y = ny; }
+  }
+  if(btnHeld(B_L)) playerTank.angle -= 0.15f;
+  if(btnHeld(B_R)) playerTank.angle += 0.15f;
+  if(btnPressed(B_SEL) && bullets.size() < 3) {
+    bullets.push_back({playerTank.x, playerTank.y, cos(playerTank.angle)*0.2f, sin(playerTank.angle)*0.2f, true, 3, now});
+    ledSet(255, 255, 0); ledPulse(100);
+  }
+
+  tankBFS();
+  if(random(100) < 3 && now - aiTank.lastShot > 1500) { bullets.push_back({aiTank.x, aiTank.y, cos(aiTank.angle)*0.2f, sin(aiTank.angle)*0.2f, true, 3, now}); aiTank.lastShot = now; }
+  for(auto& b : bullets) {
+    if(!b.active) continue;
+    b.x += b.dx; b.y += b.dy;
+    int mx = (int)b.x, my = (int)b.y;
+    if(tankMap[my][mx] != 0) {
+      if(tankMap[my][mx] == 2) tankMap[my][mx] = 0; // Destroy wall
+      if(b.bounces-- > 0) {
+        // Simple bounce logic
+        if(tankMap[my][(int)(b.x-b.dx)] != 0) b.dy = -b.dy; else b.dx = -b.dx;
+      } else b.active = false;
+    }
+    // Check hit
+    if(gameDist(b.x, b.y, playerTank.x, playerTank.y) < 0.5f) { playerTank.hp--; b.active = false; ledSet(255,0,0); ledPulse(200); }
+    if(gameDist(b.x, b.y, aiTank.x, aiTank.y) < 0.5f) { aiTank.hp--; b.active = false; ledSet(255,255,255); ledPulse(200); }
+  }
+
+  if(playerTank.hp <= 0 || aiTank.hp <= 0) tankGameOver = true;
+  if(tankGameOver && aiTank.hp <= 0) { prefs.begin("games", false); int s = prefs.getInt("tank_wins", 0); prefs.putInt("tank_wins", s+1); prefs.end(); }
+  drawTank(); pushFrame();
+}
+
+float gameDist(float x1, float y1, float x2, float y2);
+float gameDist(float x1, float y1, float x2, float y2) { return sqrt(pow(x1-x2,2)+pow(y1-y2,2)); }
+
+// FLAPPY BIRD
+float birdY, birdV;
+struct Pipe { int x; int h; bool passed; };
+std::vector<Pipe> pipes;
+uint32_t flappyGameT = 0;
+int flappyScore = 0, flappyHi = 0;
+bool flappyGameOver = false;
+
+void flappyInit() {
+  birdY = 80; birdV = 0;
+  pipes.clear();
+  pipes.push_back({300, random(40, 100), false});
+  flappyScore = 0; flappyGameOver = false;
+  prefs.begin("games", true); flappyHi = prefs.getInt("flappy_hi", 0); prefs.end();
+}
+
+void drawFlappy() {
+  mainBuf.fillScreen(lgfx::color565(100, 200, 255));
+  // Parallax Clouds
+  for(int i=0; i<3; i++) {
+    int cx = (millis()/50 + i*120)%400 - 40;
+    mainBuf.fillCircle(cx, 40+i*10, 20, C_WHITE);
+  }
+
+  // Pipes
+  for(auto& p : pipes) {
+    mainBuf.fillRect(p.x, 0, 30, p.h, lgfx::color565(0, 200, 0));
+    mainBuf.fillRect(p.x, p.h+50, 30, 170-(p.h+50), lgfx::color565(0, 200, 0));
+    mainBuf.drawRect(p.x, 0, 30, p.h, C_BLACK);
+    mainBuf.drawRect(p.x, p.h+50, 30, 170-(p.h+50), C_BLACK);
+  }
+
+  // Bird
+  int by = (int)birdY;
+  uint16_t bCol = lgfx::color565(255, 255, 0);
+  mainBuf.fillEllipse(60, by, 8, 6, bCol);
+  mainBuf.fillCircle(65, by-2, 3, C_WHITE); // Eye
+  mainBuf.fillTriangle(68, by, 74, by-2, 74, by+2, lgfx::color565(255, 100, 0)); // Beak
+
+  // Ground
+  mainBuf.fillRect(0, 160, SCR_W, 10, lgfx::color565(150, 100, 50));
+
+  // Score
+  char scStr[16]; snprintf(scStr, sizeof(scStr), "%d", flappyScore);
+  uiCenteredText(scStr, 30, C_WHITE, &fonts::Font6);
+
+  if(flappyGameOver) {
+    uiCenteredText("GAME OVER", 80, C_WHITE, &fonts::Font4);
+    if(flappyScore > flappyHi) {
+      flappyHi = flappyScore;
+      prefs.begin("games", false); prefs.putInt("flappy_hi", flappyHi); prefs.end();
+      uiCenteredText("NEW RECORD!", 100, C_ACCENT_FUN, &fonts::Font2);
+    }
+    uiFooter("SEL: Restart  L+R: Back");
+  }
+}
+
+void handleFlappy() {
+  if(flappyGameOver) {
+    if(btnPressed(B_SEL)) { flappyInit(); drawFlappy(); pushFrame(); }
+    return;
+  }
+
+  uint32_t now = millis();
+  if(now - flappyGameT < 25) return;
+  flappyGameT = now;
+
+  if(btnPressed(B_SEL)) birdV = -3.5f;
+  birdV += 0.25f; birdY += birdV;
+
+  for(auto& p : pipes) {
+    p.x -= 3;
+    if(!p.passed && p.x < 60) { p.passed = true; flappyScore++; ledSet(0, 255, 0); ledPulse(100); }
+    // Collision
+    if(p.x < 68 && p.x+30 > 52) {
+      if(birdY-6 < p.h || birdY+6 > p.h+50) { flappyGameOver = true; ledSet(255, 0, 0); ledPulse(300); }
+    }
+  }
+
+  if(pipes.back().x < 180) pipes.push_back({320, random(30, 90), false});
+  if(pipes.front().x < -40) pipes.erase(pipes.begin());
+  if(birdY > 160 || birdY < 0) { flappyGameOver = true; ledSet(255, 0, 0); ledPulse(300); }
+
+  drawFlappy(); pushFrame();
+}
+
+// MINESWEEPER
+struct MSNode { int x, y; };
+struct MSCell { bool mine, open, flag; int adj; };
+MSCell msGrid[16][9];
+int msW=9, msH=9, msM=10;
+int msCurX=0, msCurY=0;
+bool msGameOver=false, msWin=false, msFirst=true;
+uint32_t msTimer=0, msBest=999;
+std::vector<MSNode> msQueue;
+
+void msInit(int w, int h) {
+  msW = w; msH = h; msM = (w*h)/6;
+  for(int y=0; y<msH; y++) {
+    for(int x=0; x<msW; x++) { msGrid[x][y] = {false, false, false, 0}; }
+  }
+  msCurX=w/2; msCurY=h/2; msGameOver=false; msWin=false; msFirst=true;
+  msTimer=0; msQueue.clear();
+}
+
+void msPlace(int fx, int fy) {
+  int placed=0;
+  while(placed < msM) {
+    int rx = random(msW), ry = random(msH);
+    if(!msGrid[rx][ry].mine && (abs(rx-fx)>1 || abs(ry-fy)>1)) {
+      msGrid[rx][ry].mine = true; placed++;
+    }
+  }
+  for(int y=0; y<msH; y++) {
+    for(int x=0; x<msW; x++) {
+      if(msGrid[x][y].mine) continue;
+      int c=0;
+      for(int dy=-1; dy<=1; dy++) {
+        for(int dx=-1; dx<=1; dx++) {
+          int nx=x+dx, ny=y+dy;
+          if(nx>=0 && nx<msW && ny>=0 && ny<msH && msGrid[nx][ny].mine) c++;
+        }
+      }
+      msGrid[x][y].adj = c;
+    }
+  }
+}
+
+void msOpen(int x, int y) {
+  if(x<0 || x>=msW || y<0 || y>=msH || msGrid[x][y].open || msGrid[x][y].flag) return;
+  msGrid[x][y].open = true;
+  if(msGrid[x][y].mine) { msGameOver=true; ledSet(255,0,0); ledPulse(500); return; }
+  if(msGrid[x][y].adj == 0) msQueue.push_back({x, y});
+}
+
+void msHandleQueue() {
+  int processed = 0;
+  while(!msQueue.empty() && processed < 5) {
+    MSNode n = msQueue.back(); msQueue.pop_back();
+    for(int dy=-1; dy<=1; dy++) {
+      for(int dx=-1; dx<=1; dx++) {
+        int nx=n.x+dx, ny=n.y+dy;
+        if(nx>=0 && nx<msW && ny>=0 && ny<msH && !msGrid[nx][ny].open && !msGrid[nx][ny].flag) {
+          msGrid[nx][ny].open = true;
+          if(msGrid[nx][ny].adj == 0) msQueue.push_back({nx, ny});
+        }
+      }
+    }
+    processed++;
+  // Check win
+  bool win = true;
+  for(int y=0; y<msH; y++) for(int x=0; x<msW; x++) if(!msGrid[x][y].mine && !msGrid[x][y].open) win = false;
+  if(win) { msWin=true; msGameOver=true; ledSet(255,255,255); ledPulse(500); prefs.begin("games", false); int w = prefs.getInt("ms_wins", 0); prefs.putInt("ms_wins", w+1); prefs.end(); }
+}
+
+void drawMinesweeper() {
+  mainBuf.fillScreen(C_BG); uiHeader("MINESWEEPER");
+  const int C_SZ = 16;
+  int startX = (SCR_W - msW*C_SZ)/2;
+  int startY = 30;
+
+  for(int y=0; y<msH; y++) {
+    for(int x=0; x<msW; x++) {
+      int tx = startX + x*C_SZ, ty = startY + y*C_SZ;
+      MSCell& c = msGrid[x][y];
+      if(c.open) {
+        mainBuf.fillRect(tx, ty, C_SZ-1, C_SZ-1, C_XDGRAY);
+        if(c.mine) mainBuf.fillCircle(tx+C_SZ/2, ty+C_SZ/2, 4, C_WHITE);
+        else if(c.adj > 0) {
+          mainBuf.setFont(&fonts::Font2); mainBuf.setTextColor(C_WHITE);
+          mainBuf.setCursor(tx+4, ty+1); mainBuf.print(c.adj);
+        }
+      } else {
+        mainBuf.fillRect(tx, ty, C_SZ-1, C_SZ-1, C_DGRAY);
+        if(c.flag) { mainBuf.setFont(&fonts::Font2); mainBuf.setTextColor(C_ACCENT_FUN); mainBuf.setCursor(tx+4, ty+1); mainBuf.print("f"); }
+      }
+      if(x==msCurX && y==msCurY && (millis()/200)%2==0) mainBuf.drawRect(tx, ty, C_SZ, C_SZ, C_WHITE);
+    }
+  }
+  uiFooter("UP/DW/L/R: Move  SEL: Open  R: Flag");
+}
+
+void handleMinesweeper() {
+  if(msGameOver) {
+    if(btnPressed(B_SEL)) { msInit(msW, msH); drawMinesweeper(); pushFrame(); }
+    return;
+  }
+
+  bool changed = false;
+  if(btnPressed(B_UP)) { msCurY=(msCurY+msH-1)%msH; changed=true; }
+  if(btnPressed(B_DW)) { msCurY=(msCurY+1)%msH; changed=true; }
+  if(btnPressed(B_L))  { msCurX=(msCurX+msW-1)%msW; changed=true; }
+  if(btnPressed(B_R))  { msCurX=(msCurX+1)%msW; changed=true; }
+
+  if(btnPressed(B_SEL)) {
+    if(msFirst) { msPlace(msCurX, msCurY); msFirst=false; msTimer=millis(); }
+    msOpen(msCurX, msCurY); changed=true;
+  }
+  if(btnPressed(B_R)) {
+    msGrid[msCurX][msCurY].flag = !msGrid[msCurX][msCurY].flag; changed=true;
+  }
+
+  if(!msQueue.empty()) { msHandleQueue(); changed=true; }
+
+  if(changed || (millis()%500 < 50)) {
+    drawMinesweeper(); pushFrame();
+  }
 }
