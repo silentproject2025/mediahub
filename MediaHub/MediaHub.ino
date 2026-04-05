@@ -73,6 +73,83 @@
 // ════════════════════════════════════════════════════════════════
 // COMPILE FIX: enum Btn harus sebelum fungsi apapun
 // ════════════════════════════════════════════════════════════════
+
+
+// ════════════════════════════════════════════════════════════════
+// GAME DECLARATIONS
+// ════════════════════════════════════════════════════════════════
+struct TTTMove { int bx, by, sx, sy; int score; };
+struct TTTGrid {
+  int8_t board[3][3]; // 0:empty, 1:X, 2:O
+  int8_t winner;      // 0:none, 1:X, 2:O, 3:Draw
+};
+struct Bullet {
+  float x, y, dx, dy;
+  bool active;
+  int8_t bounces;
+  uint32_t born;
+};
+struct Tank {
+  float x, y, angle;
+  int8_t hp;
+  uint32_t lastShot;
+  bool isAI;
+};
+struct MSNode { int x, y; };
+struct MSCell { bool mine, open, flag; int adj; };
+struct Pipe { int x; int h; bool passed; };
+
+// GAME GLOBALS
+TTTGrid ultimateBoard[5][5];
+int8_t bigWinner = 0; // 0:none, 1:X, 2:O, 3:Draw
+int tttBigX=2, tttBigY=2, tttSmallX=1, tttSmallY=1;
+int tttTargetBigX=-1, tttTargetBigY=-1; // Must play in this big cell
+int tttTurn = 1; // 1:X, 2:O
+bool tttVsAI = true;
+int tttAiLevel = 1; // 0:Easy, 1:Medium, 2:Hard
+uint32_t tttCursorT = 0;
+bool tttAITurn = false;
+uint32_t tttAINextMoveT = 0;
+
+uint8_t tankMap[10][19]; // 0:empty, 1:permanent, 2:destructible
+Tank playerTank, aiTank;
+std::vector<Bullet> bullets;
+uint32_t tankGameT = 0;
+bool tankGameOver = false;
+int tankScore = 0;
+
+uint32_t lastBfsT = 0;
+
+float birdY, birdV;
+
+std::vector<Pipe> pipes;
+uint32_t flappyGameT = 0;
+int flappyScore = 0, flappyHi = 0;
+bool flappyGameOver = false;
+
+MSCell msGrid[16][9];
+int msW=9, msH=9, msM=10;
+int msCurX=0, msCurY=0;
+bool msGameOver=false, msWin=false, msFirst=true;
+uint32_t msTimer=0, msBest=999;
+std::vector<MSNode> msQueue;
+
+
+// GAME PROTOTYPES
+void tttInit();
+void drawTTT();
+void handleTTT();
+void tankInit();
+void drawTank();
+void handleTank();
+void flappyInit();
+void drawFlappy();
+void handleFlappy();
+void msInit(int w, int h);
+void drawMinesweeper();
+void handleMinesweeper();
+
+
 enum Btn { B_SEL=0, B_UP, B_DW, B_R, B_L };
 
 // ════════════════════════════════════════════════════════════════
@@ -2471,55 +2548,6 @@ bool requireWifi(const char* featureName) {
 // LOOP
 // ════════════════════════════════════════════════════════════════
 
-// GAME GLOBALS
-TTTGrid ultimateBoard[5][5];
-int8_t bigWinner = 0; // 0:none, 1:X, 2:O, 3:Draw
-int tttBigX=2, tttBigY=2, tttSmallX=1, tttSmallY=1;
-int tttTargetBigX=-1, tttTargetBigY=-1; // Must play in this big cell
-int tttTurn = 1; // 1:X, 2:O
-bool tttVsAI = true;
-int tttAiLevel = 1; // 0:Easy, 1:Medium, 2:Hard
-uint32_t tttCursorT = 0;
-bool tttAITurn = false;
-uint32_t tttAINextMoveT = 0;
-
-uint8_t tankMap[10][19]; // 0:empty, 1:permanent, 2:destructible
-Tank playerTank, aiTank;
-std::vector<Bullet> bullets;
-uint32_t tankGameT = 0;
-bool tankGameOver = false;
-int tankScore = 0;
-
-uint32_t lastBfsT = 0;
-
-float birdY, birdV;
-struct Pipe { int x; int h; bool passed; };
-std::vector<Pipe> pipes;
-uint32_t flappyGameT = 0;
-int flappyScore = 0, flappyHi = 0;
-bool flappyGameOver = false;
-
-MSCell msGrid[16][9];
-int msW=9, msH=9, msM=10;
-int msCurX=0, msCurY=0;
-bool msGameOver=false, msWin=false, msFirst=true;
-uint32_t msTimer=0, msBest=999;
-std::vector<MSNode> msQueue;
-
-// GAME PROTOTYPES
-void tttInit();
-void drawTTT();
-void handleTTT();
-void tankInit();
-void drawTank();
-void handleTank();
-void flappyInit();
-void drawFlappy();
-void handleFlappy();
-void msInit(int w, int h);
-void drawMinesweeper();
-void handleMinesweeper();
-
 void loop() {
 
   autoBrUpdate();
@@ -2917,10 +2945,7 @@ void drawGameMenu() {
 }
 
 // TIC TAC TOE ULTIMATE
-struct TTTGrid {
-  int8_t board[3][3]; // 0:empty, 1:X, 2:O
-  int8_t winner;      // 0:none, 1:X, 2:O, 3:Draw
-};
+
 
 
 
@@ -3055,7 +3080,7 @@ void drawTTT() {
 }
 
 // AI: Minimax simplified for non-blocking
-struct TTTMove { int bx, by, sx, sy; int score; };
+
 TTTMove tttBestMove;
 
 int tttEvaluate() {
@@ -3161,19 +3186,9 @@ void handleTTT() {
 }
 
 // TANK BATTLE
-struct Tank {
-  float x, y, angle;
-  int8_t hp;
-  uint32_t lastShot;
-  bool isAI;
-};
 
-struct Bullet {
-  float x, y, dx, dy;
-  bool active;
-  int8_t bounces;
-  uint32_t born;
-};
+
+
 
 
 
@@ -3384,8 +3399,8 @@ void handleFlappy() {
 }
 
 // MINESWEEPER
-struct MSNode { int x, y; };
-struct MSCell { bool mine, open, flag; int adj; };
+
+
 
 
 void msInit(int w, int h) {
