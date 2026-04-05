@@ -1,0 +1,40 @@
+name: Compile ESP32-S3 Binary
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Arduino CLI
+        uses: arduino/setup-arduino-cli@v2
+
+      - name: Install ESP32 Core
+        run: |
+          arduino-cli core update-index --additional-urls https://raw.githubusercontent.com/espressif/arduino-esp32/gh-pages/package_esp32_index.json
+          arduino-cli core install esp32:esp32 --additional-urls https://raw.githubusercontent.com/espressif/arduino-esp32/gh-pages/package_esp32_index.json
+
+      - name: Install Libraries
+        run: |
+          arduino-cli lib install "LovyanGFX"
+          arduino-cli lib install "ArduinoJson"
+          arduino-cli lib install "Adafruit NeoPixel"
+          arduino-cli lib install "JPEGDEC"
+
+      - name: Compile Sketch
+        run: |
+          arduino-cli compile --fqbn esp32:esp32:esp32s3:FlashSize=16M,PSRAM=opi,PartitionScheme=huge_app --output-dir ./build MediaHub/MediaHub.ino
+
+      - name: Upload Binary
+        uses: actions/upload-artifact@v4
+        with:
+          name: MediaHub-Binary
+          path: ./build/*.bin
