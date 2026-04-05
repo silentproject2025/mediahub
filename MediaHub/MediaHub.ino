@@ -98,6 +98,8 @@ struct Tank {
 struct MSNode { int x, y; };
 struct MSCell { bool mine, open, flag; int adj; };
 struct Pipe { int x; int h; bool passed; };
+struct PacChar { float x, y, dx, dy; int8_t type; /*0:pac, 1-3:ghosts*/ };
+struct Platform { float x, y; int8_t type; /*0:normal, 1:break*/ };
 
 // GAME GLOBALS
 TTTGrid ultimateBoard[5][5];
@@ -134,6 +136,22 @@ bool msGameOver=false, msWin=false, msFirst=true;
 uint32_t msTimer=0, msBest=999;
 std::vector<MSNode> msQueue;
 
+// PACMAN
+static int8_t pacMap[11][21];
+static PacChar pacPlayer;
+static PacChar ghosts[3];
+static int pacScore=0, pacHi=0, pacDots=0;
+static bool pacGameOver=false;
+static uint32_t pacGameT=0;
+
+// DOODLE
+static std::vector<Platform> platforms;
+static float doodleY, doodleV, doodleX;
+static float doodleCamY;
+static int doodleScore=0, doodleHi=0;
+static bool doodleGameOver=false;
+static uint32_t doodleGameT=0;
+
 
 // GAME PROTOTYPES
 void tttInit();
@@ -148,6 +166,8 @@ void handleFlappy();
 void msInit(int w, int h);
 void drawMinesweeper();
 void handleMinesweeper();
+void pacmanInit(); void drawPacman(); void handlePacman();
+void doodleInit(); void drawDoodle(); void handleDoodle();
 
 
 enum Btn { B_SEL=0, B_UP, B_DW, B_R, B_L };
@@ -377,7 +397,7 @@ enum AppState {
   ST_GAME_MENU, ST_TICTACTOE_MODE, ST_TICTACTOE, ST_TICTACTOE_OVER,
   ST_TANK_MODE, ST_TANK, ST_TANK_OVER,
   ST_FLAPPY_MODE, ST_FLAPPY, ST_FLAPPY_OVER,
-  ST_MINESWEEPER_SIZE, ST_MINESWEEPER, ST_MINESWEEPER_OVER
+  ST_MINESWEEPER_SIZE, ST_MINESWEEPER, ST_MINESWEEPER_OVER, ST_PACMAN_MODE, ST_PACMAN, ST_PACMAN_OVER, ST_DOODLE_MODE, ST_DOODLE, ST_DOODLE_OVER
 };
 static AppState appState = ST_SPLASH;
 
@@ -838,8 +858,8 @@ static int      textScrollY=0;
 // ════════════════════════════════════════════════════════════════
 // GAMES GLOBAL
 static int gameMenuSel = 0;
-const char* gameList[] = {"TIC TAC TOE", "TANK BATTLE", "FLAPPY BIRD", "MINESWEEPER"};
-const char* gameSub[]  = {"Ultimate 5x5", "Grid Combat", "Classic Bird", "Grid Reveal"};
+const char* gameList[] = {"TIC TAC TOE", "TANK BATTLE", "FLAPPY BIRD", "MINESWEEPER", "PAC-MAN", "DOODLE JUMP"};
+const char* gameSub[]  = {"Ultimate 5x5", "Grid Combat", "Classic Bird", "Grid Reveal", "Maze Run", "Endless Jump"};
 
 
 static int menuSel = 0;
@@ -2568,7 +2588,7 @@ void loop() {
       mainBuf.setCursor((SCR_W-tw2)/2,SCR_H/2-5); mainBuf.print(msg);
       pushFrame(); ledSet(0,0,0); delay(300);
       _barPulseT = millis();
-      if(appState >= ST_GAME_MENU && appState <= ST_MINESWEEPER_OVER) { if(appState == ST_GAME_MENU) appState = ST_MENU; else appState = ST_GAME_MENU; } else appState = ST_MENU; textScrollY=0; if(appState==ST_MENU) drawMenu(); else if(appState==ST_GAME_MENU) drawGameMenu(); pushFrame(); btnFlushAll(); return;
+      if(appState >= ST_GAME_MENU && appState <= ST_DOODLE_OVER) { if(appState == ST_GAME_MENU) appState = ST_MENU; else appState = ST_GAME_MENU; } else appState = ST_MENU; textScrollY=0; if(appState==ST_MENU) drawMenu(); else if(appState==ST_GAME_MENU) drawGameMenu(); pushFrame(); btnFlushAll(); return;
     }
   }
 
@@ -2889,13 +2909,15 @@ void loop() {
       ledPulse(1500); break;
 
     case ST_GAME_MENU:
-      if(btnPressed(B_UP)){gameMenuSel=(gameMenuSel+3)%4; drawGameMenu(); pushFrame();}
-      if(btnPressed(B_DW)){gameMenuSel=(gameMenuSel+1)%4; drawGameMenu(); pushFrame();}
+      if(btnPressed(B_UP)){gameMenuSel=(gameMenuSel+5)%6; drawGameMenu(); pushFrame();}
+      if(btnPressed(B_DW)){gameMenuSel=(gameMenuSel+1)%6; drawGameMenu(); pushFrame();}
       if(btnPressed(B_SEL)){
         if(gameMenuSel==0) appState=ST_TICTACTOE_MODE;
         else if(gameMenuSel==1) appState=ST_TANK_MODE;
         else if(gameMenuSel==2) appState=ST_FLAPPY_MODE;
         else if(gameMenuSel==3) appState=ST_MINESWEEPER_SIZE;
+        else if(gameMenuSel==4) appState=ST_PACMAN_MODE;
+        else if(gameMenuSel==5) appState=ST_DOODLE_MODE;
         btnFlushAll();
       }
       drawGameMenu(); pushFrame(); break;
@@ -2926,16 +2948,29 @@ void loop() {
 
     case ST_TANK_OVER:
       drawTank(); pushFrame(); if(btnPressed(B_SEL)){ tankInit(); appState=ST_TANK; } break;
+    case ST_PACMAN_MODE:
+      pacmanInit(); appState=ST_PACMAN; drawPacman(); pushFrame(); break;
+    case ST_PACMAN:
+      handlePacman(); break;
+    case ST_PACMAN_OVER:
+      drawPacman(); pushFrame(); if(btnPressed(B_SEL)){ pacmanInit(); appState=ST_PACMAN; } break;
+    case ST_DOODLE_MODE:
+      doodleInit(); appState=ST_DOODLE; drawDoodle(); pushFrame(); break;
+    case ST_DOODLE:
+      handleDoodle(); break;
+    case ST_DOODLE_OVER:
+      drawDoodle(); pushFrame(); if(btnPressed(B_SEL)){ doodleInit(); appState=ST_DOODLE; } break;
   }
 
   delay(4);
 }
 void drawGameMenu() {
-  mainBuf.fillScreen(C_BG); uiHeader("4 MINI GAMES");
+  mainBuf.fillScreen(C_BG); uiHeader("6 MINI GAMES");
   const int ITEM_H = 32, GAP = 4;
-  for(int i=0; i<4; i++) {
+  int startIdx = max(0, min(2, gameMenuSel-2));
+  for(int i=startIdx; i<startIdx+4; i++) {
     bool sel = (i == gameMenuSel);
-    int y = 32 + i * (ITEM_H + GAP);
+    int y = 32 + (i-startIdx) * (ITEM_H + GAP);
     uiCard(8, y, SCR_W-16, ITEM_H, sel ? C_WHITE : C_DGRAY, 8);
     if(sel) mainBuf.fillRoundRect(8, y+4, 3, ITEM_H-8, 2, C_WHITE);
     mainBuf.setFont(&fonts::Font4); mainBuf.setTextColor(sel ? C_WHITE : C_MGRAY);
@@ -3544,4 +3579,212 @@ void handleMinesweeper() {
   if(changed || (millis()%500 < 50)) {
     drawMinesweeper(); pushFrame();
   }
+}
+
+// PAC-MAN LITE
+void pacmanInit() {
+  const int8_t MAZE[11][21] = {
+    {1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1},
+    {1,0,0,0,0,1,0,0,0,0,1,0,0,0,0,1,0,0,0,0,1},
+    {1,0,1,1,0,1,0,1,1,0,1,0,1,1,0,1,0,1,1,0,1},
+    {1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1},
+    {1,1,0,1,1,0,1,1,1,0,1,0,1,1,1,0,1,1,0,1,1},
+    {0,0,0,0,0,0,1,0,0,0,0,0,0,0,1,0,0,0,0,0,0},
+    {1,1,0,1,1,0,1,1,1,1,1,1,1,1,1,0,1,1,0,1,1},
+    {1,0,0,0,0,0,0,0,0,0,1,0,0,0,0,0,0,0,0,0,1},
+    {1,0,1,1,0,1,1,1,1,0,1,0,1,1,1,1,0,1,1,0,1},
+    {1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1},
+    {1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1}
+  };
+  pacDots = 0;
+  for(int y=0; y<11; y++) {
+    for(int x=0; x<21; x++) {
+      pacMap[y][x] = MAZE[y][x];
+      if(pacMap[y][x] == 0) { pacMap[y][x] = 2; pacDots++; }
+    }
+  }
+  pacPlayer = {10.5f, 7.5f, 0, 0, 0};
+  ghosts[0] = {1.5f, 1.5f, 0, 0, 1};
+  ghosts[1] = {19.5f, 1.5f, 0, 0, 2};
+  ghosts[2] = {10.5f, 1.5f, 0, 0, 3};
+  pacScore = 0; pacGameOver = false;
+  prefs.begin("games", true); pacHi = prefs.getInt("pac_hi", 0); prefs.end();
+}
+
+void drawPacman() {
+  mainBuf.fillScreen(C_BLACK);
+  uiHeader("PAC-MAN LITE");
+  const int T_SZ = 14;
+  const int OFF_X = (SCR_W - 21*T_SZ)/2;
+  const int OFF_Y = 25;
+
+  for(int y=0; y<11; y++) {
+    for(int x=0; x<21; x++) {
+      int tx = OFF_X + x*T_SZ, ty = OFF_Y + y*T_SZ;
+      if(pacMap[y][x] == 1) mainBuf.fillRect(tx+1, ty+1, T_SZ-2, T_SZ-2, lgfx::color565(0,0,150));
+      else if(pacMap[y][x] == 2) mainBuf.fillCircle(tx+T_SZ/2, ty+T_SZ/2, 1, C_WHITE);
+    }
+  }
+
+  // Player
+  int px = OFF_X + pacPlayer.x*T_SZ, py = OFF_Y + pacPlayer.y*T_SZ;
+  mainBuf.fillCircle(px, py, 5, lgfx::color565(255,255,0));
+
+  // Ghosts
+  uint16_t gCols[] = {lgfx::color565(255,0,0), lgfx::color565(255,182,193), lgfx::color565(0,255,255)};
+  for(int i=0; i<3; i++) {
+    int gx = OFF_X + ghosts[i].x*T_SZ, gy = OFF_Y + ghosts[i].y*T_SZ;
+    mainBuf.fillCircle(gx, gy, 5, gCols[i]);
+    mainBuf.fillCircle(gx-2, gy-2, 1, C_WHITE); mainBuf.fillCircle(gx+2, gy-2, 1, C_WHITE);
+  }
+
+  char buf[32]; snprintf(buf, sizeof(buf), "SCORE:%d HI:%d", pacScore, pacHi);
+  uiFooter(buf);
+
+  if(pacGameOver) {
+    uiCenteredText("GAME OVER", 80, C_WHITE, &fonts::Font4);
+    if(pacScore > pacHi) {
+      pacHi = pacScore;
+      prefs.begin("games", false); prefs.putInt("pac_hi", pacHi); prefs.end();
+      uiCenteredText("NEW RECORD!", 100, C_ACCENT_FUN, &fonts::Font2);
+    }
+    uiFooter("SEL: Restart  L+R: Back");
+  }
+}
+
+void handlePacman() {
+  if(pacGameOver) {
+    if(btnPressed(B_SEL)) { pacmanInit(); drawPacman(); pushFrame(); }
+    return;
+  }
+  uint32_t now = millis();
+  if(now - pacGameT < 40) return;
+  pacGameT = now;
+
+  float lastX = pacPlayer.x, lastY = pacPlayer.y;
+  if(btnHeld(B_UP)) { pacPlayer.dx=0; pacPlayer.dy=-0.15f; }
+  if(btnHeld(B_DW)) { pacPlayer.dx=0; pacPlayer.dy=0.15f; }
+  if(btnHeld(B_L))  { pacPlayer.dx=-0.15f; pacPlayer.dy=0; }
+  if(btnHeld(B_R))  { pacPlayer.dx=0.15f; pacPlayer.dy=0; }
+
+  pacPlayer.x += pacPlayer.dx; pacPlayer.y += pacPlayer.dy;
+  if(pacMap[(int)pacPlayer.y][(int)pacPlayer.x] == 1) { pacPlayer.x = lastX; pacPlayer.y = lastY; }
+
+  // Wrap around
+  if(pacPlayer.x < 0) pacPlayer.x = 20.9f;
+  if(pacPlayer.x > 21) pacPlayer.x = 0.1f;
+
+  if(pacMap[(int)pacPlayer.y][(int)pacPlayer.x] == 2) {
+    pacMap[(int)pacPlayer.y][(int)pacPlayer.x] = 0; pacScore += 10; pacDots--;
+    ledSet(0, 50, 0); ledPulse(50);
+    if(pacDots <= 0) pacmanInit(); // Next level / Reset
+  }
+
+  // Ghost AI (Simple toward player)
+  for(int i=0; i<3; i++) {
+    float glastX = ghosts[i].x, glastY = ghosts[i].y;
+    if(random(100) < 5) { // Change direction occasionally
+       if(abs(pacPlayer.x - ghosts[i].x) > abs(pacPlayer.y - ghosts[i].y)) {
+         ghosts[i].dx = (pacPlayer.x > ghosts[i].x) ? 0.1f : -0.1f; ghosts[i].dy = 0;
+       } else {
+         ghosts[i].dy = (pacPlayer.y > ghosts[i].y) ? 0.1f : -0.1f; ghosts[i].dx = 0;
+       }
+    }
+    ghosts[i].x += ghosts[i].dx; ghosts[i].y += ghosts[i].dy;
+    if(pacMap[(int)ghosts[i].y][(int)ghosts[i].x] == 1) { ghosts[i].x = glastX; ghosts[i].y = glastY; ghosts[i].dx = -ghosts[i].dx; ghosts[i].dy = -ghosts[i].dy; }
+
+    if(sqrt(pow(pacPlayer.x-ghosts[i].x,2)+pow(pacPlayer.y-ghosts[i].y,2)) < 0.6f) { pacGameOver = true; ledSet(255,0,0); ledPulse(500); }
+  }
+
+  drawPacman(); pushFrame();
+}
+
+// DOODLE JUMP
+void doodleInit() {
+  doodleX = 160; doodleY = 100; doodleV = -5;
+  doodleCamY = 0; doodleScore = 0; doodleGameOver = false;
+  platforms.clear();
+  for(int i=0; i<10; i++) {
+    platforms.push_back({(float)random(20, 280), (float)(150 - i*30), 0});
+  }
+  prefs.begin("games", true); doodleHi = prefs.getInt("doodle_hi", 0); prefs.end();
+}
+
+void drawDoodle() {
+  mainBuf.fillScreen(lgfx::color565(250, 250, 230)); // Paper color
+  uiHeader("DOODLE JUMP");
+
+  // Grid lines
+  for(int i=0; i<SCR_W; i+=20) mainBuf.drawFastVLine(i, 25, SCR_H-25, lgfx::color565(230, 230, 255));
+  for(int i=25; i<SCR_H; i+=20) mainBuf.drawFastHLine(0, i, SCR_W, lgfx::color565(230, 230, 255));
+
+  // Platforms
+  for(auto& p : platforms) {
+    int py = (int)(p.y - doodleCamY + 120);
+    if(py > 25 && py < SCR_H) {
+      mainBuf.fillRoundRect(p.x-15, py, 30, 6, 3, lgfx::color565(100, 200, 0));
+      mainBuf.drawRoundRect(p.x-15, py, 30, 6, 3, C_BLACK);
+    }
+  }
+
+  // Player (Doodle)
+  int dy = (int)(doodleY - doodleCamY + 120);
+  mainBuf.fillEllipse(doodleX, dy, 8, 10, lgfx::color565(180, 200, 50));
+  mainBuf.fillCircle(doodleX-4, dy-4, 2, C_BLACK); mainBuf.fillCircle(doodleX+4, dy-4, 2, C_BLACK);
+  mainBuf.fillRect(doodleX-2, dy+2, 4, 8, lgfx::color565(180, 200, 50)); // Snout
+
+  char sc[16]; snprintf(sc, sizeof(sc), "SCORE: %d", doodleScore);
+  uiFooter(sc);
+
+  if(doodleGameOver) {
+    uiCenteredText("GAME OVER", 80, C_WHITE, &fonts::Font4);
+    if(doodleScore > doodleHi) {
+      doodleHi = doodleScore;
+      prefs.begin("games", false); prefs.putInt("doodle_hi", doodleHi); prefs.end();
+      uiCenteredText("NEW RECORD!", 100, C_ACCENT_FUN, &fonts::Font2);
+    }
+    uiFooter("SEL: Restart  L+R: Back");
+  }
+}
+
+void handleDoodle() {
+  if(doodleGameOver) {
+    if(btnPressed(B_SEL)) { doodleInit(); drawDoodle(); pushFrame(); }
+    return;
+  }
+  uint32_t now = millis();
+  if(now - doodleGameT < 30) return;
+  doodleGameT = now;
+
+  if(btnHeld(B_L)) doodleX -= 4;
+  if(btnHeld(B_R)) doodleX += 4;
+  if(doodleX < 0) doodleX = 320;
+  if(doodleX > 320) doodleX = 0;
+
+  doodleV += 0.2f; // Gravity
+  doodleY += doodleV;
+
+  if(doodleY < doodleCamY) {
+    doodleCamY = doodleY;
+    if(-doodleY > doodleScore) doodleScore = (int)-doodleY;
+  }
+
+  // Collision
+  if(doodleV > 0) {
+    for(auto& p : platforms) {
+      if(doodleX > p.x-20 && doodleX < p.x+20 && doodleY > p.y-5 && doodleY < p.y+5) {
+        doodleV = -6.5f; ledSet(50, 50, 0); ledPulse(50); break;
+      }
+    }
+  }
+
+  // Infinite generation
+  if(platforms.back().y > doodleCamY - 200) {
+    platforms.push_back({(float)random(20, 300), platforms.back().y - (float)random(30, 50), 0});
+  }
+  if(platforms.front().y > doodleCamY + 200) platforms.erase(platforms.begin());
+
+  if(doodleY - doodleCamY > 100) { doodleGameOver = true; ledSet(255, 0, 0); ledPulse(500); }
+
+  drawDoodle(); pushFrame();
 }
