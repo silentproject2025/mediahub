@@ -2782,18 +2782,18 @@ void loop() {
           case 14: // ISS TRACKER
             if(!requireWifi("ISS TRACKER")) break;
             appState=ST_ISS_TRACKER;
-            if(!issFetched){ drawLoading("ISS TRACKER"); fetchIss(); }
-            drawIssTracker(); pushFrame(); btnFlushAll(); break;
+            if(!issFetched){ drawLoading("ISS TRACKER"); fetchISSNow(); }
+            drawISS(); pushFrame(); btnFlushAll(); break;
           case 15: // PEOPLE IN SPACE
             if(!requireWifi("PEOPLE IN SPACE")) break;
             appState=ST_PEOPLE_SPACE;
-            if(!peopleFetched){ drawLoading("PEOPLE IN SPACE"); fetchPeople(); }
+            if(!astronautFetched){ drawLoading("PEOPLE IN SPACE"); fetchPeopleInSpace(); }
             drawPeopleInSpace(); pushFrame(); btnFlushAll(); break;
           case 16: // APOD
             if(!requireWifi("APOD NASA")) break;
             appState=ST_APOD;
-            if(!apodFetched){ drawLoading("APOD NASA"); fetchApod(); }
-            drawApod(); pushFrame(); btnFlushAll(); break;
+            if(!apodFetched){ drawLoading("APOD NASA"); fetchAPOD(); }
+            drawAPOD(); pushFrame(); btnFlushAll(); break;
           case 17:
             appState=ST_GAME_MENU; drawGameMenu(); pushFrame(); btnFlushAll(); break;
         }
@@ -3101,9 +3101,9 @@ void loop() {
     case ST_SIMON_MODE: simonInit(); appState=ST_SIMON; break;
     case ST_SIMON: handleSimon(); break;
     case ST_SIMON_OVER: drawSimon(); pushFrame(); if(btnPressed(B_SEL)) simonInit(); break;
-    case ST_SUDOKU_MODE: sudokuInit(); appState=ST_SUDOKU; break;
+    case ST_SUDOKU_MODE: sudoInit(); appState=ST_SUDOKU; break;
     case ST_SUDOKU: handleSudoku(); break;
-    case ST_SUDOKU_OVER: drawSudoku(); pushFrame(); if(btnPressed(B_SEL)) sudokuInit(); break;
+    case ST_SUDOKU_OVER: drawSudoku(); pushFrame(); if(btnPressed(B_SEL)) sudoInit(); break;
   }
 
   delay(4);
