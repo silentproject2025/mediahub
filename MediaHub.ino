@@ -296,7 +296,10 @@ enum AppState {
   ST_BORED,
   ST_PEOPLE_SPACE,
   ST_HACKER_NEWS,
-  ST_HN_COMMENTS    // [NEW v9.1] Layar komentar HN
+  ST_HN_COMMENTS,    // [NEW v9.1]
+  ST_ANIME_SEARCH,   // [NEW v9.2]
+  ST_HISTORY,        // [NEW v9.2]
+  ST_IP_LOOKUP       // [NEW v9.2]
 };
 static AppState appState = ST_SPLASH;
 
@@ -749,13 +752,27 @@ static int      hnCommentsStoryIdx=-1;
 static int      hnCommentsSel=0;
 static int      hnCommentsScrollY=0;
 
+// Anime Search
+struct AnimeInfo { String title, synopsis, type; float score; int episodes; };
+static AnimeInfo animeData;
+static bool animeFetched = false;
+
+// Today in History
+struct HistoryEvent { String year, text; };
+static std::vector<HistoryEvent> historyEvents;
+static bool historyFetched = false;
+static int historySel = 0;
+static int historyScrollY = 0;
+
+// IP Lookup
+struct IPInfo { String query, isp, city, region, country; };
+static IPInfo ipData;
+static bool ipFetched = false;
+
 // Scroll untuk layar teks panjang
 static int      textScrollY=0;
 
 // ════════════════════════════════════════════════════════════════
-// MENU v9.0 — 16 ITEM
-// ════════════════════════════════════════════════════════════════
-static int menuSel = 0;
 static const char* menuItems[] = {
   "VIDEO", "TRIVIA",
   "FILE MANAGER", "WIFI", "SETTINGS", "POWER",
@@ -764,6 +781,7 @@ static const char* menuItems[] = {
   "STOIC QUOTE", "NUMBER FACT",
   "ISS TRACKER", "PEOPLE IN SPACE",
   "APOD — NASA",
+  "ANIME SEARCH", "TODAY IN HISTORY", "IP LOOKUP",
 };
 static const char* menuSubtitle[] = {
   "putar .mjpeg SD",
@@ -782,9 +800,11 @@ static const char* menuSubtitle[] = {
   "posisi ISS real-time",
   "astronaut di orbit",
   "foto luar angkasa NASA",
+  "cari info & skor anime",
+  "peristiwa sejarah hari ini",
+  "cek IP & info koneksi",
 };
-#define MENU_N 16
-
+#define MENU_N 19
 static uint32_t _barPulseT = 0;
 static uint8_t  _barAlpha  = 160;
 static bool     _barUp     = true;
@@ -2264,6 +2284,111 @@ bool fetchHNComments(int storyId) {
   return !hnComments.empty();
 }
 
+// [v9.2] Fetch Anime via Jikan API
+bool fetchAnime() {
+  String resp = httpGetSecure("https://api.jikan.moe/v4/random/anime");
+  if(resp.isEmpty()) return false;
+  DynamicJsonDocument doc(8192);
+  if(deserializeJson(doc, resp)) return false;
+  auto data = doc["data"];
+  if(data.isNull()) return false;
+  animeData.title = data["title"].as<String>();
+  animeData.synopsis = data["synopsis"].as<String>();
+  animeData.type = data["type"].as<String>();
+  animeData.score = data["score"] | 0.0f;
+  animeData.episodes = data["episodes"] | 0;
+  animeFetched = true;
+  return true;
+}
+
+// [v9.2] Fetch Today in History via Wikipedia API
+bool fetchHistory() {
+  if(gClock.month == 0 || gClock.day == 0) return false;
+  char url[100];
+  snprintf(url, sizeof(url), "https://en.wikipedia.org/api/rest_v1/feed/onthisday/events/%02d/%02d", gClock.month, gClock.day);
+  String resp = httpGetSecure(url);
+  if(resp.isEmpty()) return false;
+  DynamicJsonDocument doc(16384);
+  if(deserializeJson(doc, resp)) return false;
+  historyEvents.clear();
+  auto events = doc["events"].as<JsonArray>();
+  int added = 0;
+  for(auto ev : events) {
+    if(added >= 10) break;
+    historyEvents.push_back({ev["year"].as<String>(), ev["text"].as<String>()});
+    added++;
+  }
+  historyFetched = true;
+  historySel = 0;
+  historyScrollY = 0;
+  return true;
+}
+
+// [v9.2] Fetch IP Info via ip-api.com
+bool fetchIPInfo() {
+  String resp = httpGetSecure("https://ip-api.com/json/");
+  if(resp.isEmpty()) return false;
+  DynamicJsonDocument doc(1024);
+  if(deserializeJson(doc, resp)) return false;
+  if(doc["status"] != "success") return false;
+  ipData.query = doc["query"].as<String>();
+  ipData.isp = doc["isp"].as<String>();
+  ipData.city = doc["city"].as<String>();
+  ipData.region = doc["regionName"].as<String>();
+  ipData.country = doc["country"].as<String>();
+  ipFetched = true;
+  return true;
+}
+
+
+// [v9.2] UI: Anime Search
+void drawAnime() {
+  mainBuf.fillScreen(C_BG); uiHeader("ANIME SEARCH");
+  if(!wifiConnected){ uiCenteredText("WiFi diperlukan",68,C_MGRAY,&fonts::Font2); uiFooter("L+R:back"); pushFrame(); return; }
+  if(!animeFetched){ uiCenteredText("SEL untuk cari anime",80,C_MGRAY,&fonts::Font2); uiFooter("SEL:fetch  L+R:back"); pushFrame(); return; }
+  mainBuf.setFont(&fonts::Font4); mainBuf.setTextColor(C_WHITE);
+  String t = animeData.title; if(mainBuf.textWidth(t.c_str())>SCR_W-10) t = t.substring(0,22)+"...";
+  mainBuf.setCursor(6,30); mainBuf.print(t);
+  mainBuf.setFont(&fonts::Font2); mainBuf.setTextColor(C_DGRAY);
+  char info[64]; snprintf(info, sizeof(info), "%s | %d eps | Score: %.2f", animeData.type.c_str(), animeData.episodes, animeData.score);
+  mainBuf.setCursor(6,48); mainBuf.print(info);
+  mainBuf.drawFastHLine(0,62,SCR_W,C_DGRAY);
+  uiWrapScroll(animeData.synopsis, 6, 66, SCR_W-12, SCR_H-82, textScrollY, C_LGRAY, 12);
+  uiFooter("UP/DW:scroll  SEL:acak lagi  L+R:back");
+}
+
+// [v9.2] UI: Today in History
+void drawHistory() {
+  mainBuf.fillScreen(C_BG); uiHeader("TODAY IN HISTORY");
+  if(!wifiConnected){ uiCenteredText("WiFi diperlukan",68,C_MGRAY,&fonts::Font2); uiFooter("L+R:back"); pushFrame(); return; }
+  if(!historyFetched){ uiCenteredText("SEL untuk ambil data",80,C_MGRAY,&fonts::Font2); uiFooter("SEL:fetch  L+R:back"); pushFrame(); return; }
+  String allText = "";
+  for(int i=0; i<(int)historyEvents.size(); i++) {
+    allText += "[" + historyEvents[i].year + "] " + historyEvents[i].text + "\n\n";
+  }
+  uiWrapScroll(allText, 6, 30, SCR_W-12, SCR_H-46, historyScrollY, C_WHITE, 12);
+  uiFooter("UP/DW:scroll  SEL:refresh  L+R:back");
+}
+
+// [v9.2] UI: IP Lookup
+void drawIPInfo() {
+  mainBuf.fillScreen(C_BG); uiHeader("IP LOOKUP");
+  if(!wifiConnected){ uiCenteredText("WiFi diperlukan",68,C_MGRAY,&fonts::Font2); uiFooter("L+R:back"); pushFrame(); return; }
+  if(!ipFetched){ uiCenteredText("SEL untuk cek IP",80,C_MGRAY,&fonts::Font2); uiFooter("SEL:fetch  L+R:back"); pushFrame(); return; }
+  int y = 36, gap = 18;
+  mainBuf.setFont(&fonts::Font2);
+  auto drawRow = [&](const char* lbl, String val) {
+    mainBuf.setTextColor(C_DGRAY); mainBuf.setCursor(10, y); mainBuf.print(lbl);
+    mainBuf.setTextColor(C_WHITE); mainBuf.setCursor(70, y); mainBuf.print(val);
+    y += gap;
+  };
+  drawRow("IP Address", ipData.query);
+  drawRow("ISP", ipData.isp);
+  drawRow("City", ipData.city);
+  drawRow("Region", ipData.region);
+  drawRow("Country", ipData.country);
+  uiFooter("SEL:refresh  L+R:back");
+}
 void drawHackerNews() {
   mainBuf.fillScreen(C_BG); uiHeader("HACKER NEWS");
   if(!wifiConnected){ uiCenteredText("WiFi diperlukan",68,C_MGRAY,&fonts::Font2); uiFooter("L+R:back"); pushFrame(); return; }
@@ -2552,6 +2677,21 @@ void loop() {
             appState=ST_APOD; textScrollY=0;
             if(!apodFetched){ drawLoading("APOD — NASA","Mengambil dari NASA..."); pushFrame(); fetchAPOD(); }
             drawAPOD(); pushFrame(); btnFlushAll(); break;
+          case 16: // ANIME SEARCH
+            if(!requireWifi("ANIME SEARCH")) break;
+            appState=ST_ANIME_SEARCH; textScrollY=0;
+            if(!animeFetched){ drawLoading("ANIME SEARCH"); pushFrame(); fetchAnime(); }
+            drawAnime(); pushFrame(); btnFlushAll(); break;
+          case 17: // TODAY IN HISTORY
+            if(!requireWifi("TODAY IN HISTORY")) break;
+            appState=ST_HISTORY; historyScrollY=0;
+            if(!historyFetched){ drawLoading("TODAY IN HISTORY"); pushFrame(); fetchHistory(); }
+            drawHistory(); pushFrame(); btnFlushAll(); break;
+          case 18: // IP LOOKUP
+            if(!requireWifi("IP LOOKUP")) break;
+            appState=ST_IP_LOOKUP;
+            if(!ipFetched){ drawLoading("IP LOOKUP"); pushFrame(); fetchIPInfo(); }
+            drawIPInfo(); pushFrame(); btnFlushAll(); break;
         }
         break;
       }
@@ -2794,6 +2934,22 @@ void loop() {
           fetchHNComments(hnStories[hnCommentsStoryIdx].id);
         drawHNComments(); pushFrame(); btnFlushAll();
       }
+      ledPulse(1500); break;
+
+    case ST_ANIME_SEARCH:
+      if(btnPressed(B_UP)){ textScrollY=max(0,textScrollY-12); drawAnime(); pushFrame(); }
+      if(btnPressed(B_DW)){ textScrollY+=12; drawAnime(); pushFrame(); }
+      if(btnPressed(B_SEL)){ animeFetched=false; drawLoading("ANIME SEARCH"); pushFrame(); fetchAnime(); drawAnime(); pushFrame(); btnFlushAll(); }
+      ledPulse(1500); break;
+
+    case ST_HISTORY:
+      if(btnPressed(B_UP)){ historyScrollY=max(0,historyScrollY-12); drawHistory(); pushFrame(); }
+      if(btnPressed(B_DW)){ historyScrollY+=12; drawHistory(); pushFrame(); }
+      if(btnPressed(B_SEL)){ historyFetched=false; drawLoading("TODAY IN HISTORY"); pushFrame(); fetchHistory(); drawHistory(); pushFrame(); btnFlushAll(); }
+      ledPulse(1500); break;
+
+    case ST_IP_LOOKUP:
+      if(btnPressed(B_SEL)){ ipFetched=false; drawLoading("IP LOOKUP"); pushFrame(); fetchIPInfo(); drawIPInfo(); pushFrame(); btnFlushAll(); }
       ledPulse(1500); break;
 
     default: break;
