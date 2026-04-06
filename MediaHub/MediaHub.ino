@@ -393,6 +393,7 @@ enum AppState {
   ST_BORED,
   ST_PEOPLE_SPACE,
   ST_HACKER_NEWS,
+  ST_AI_MODE, ST_AI_CHAT_INPUT, ST_AI_CHAT_RES,
   ST_HN_COMMENTS,    // [NEW v9.1] Layar komentar HN
   ST_GAME_MENU, ST_TICTACTOE_MODE, ST_TICTACTOE, ST_TICTACTOE_OVER,
   ST_TANK_MODE, ST_TANK, ST_TANK_OVER,
@@ -852,6 +853,14 @@ static int      hnCommentsScrollY=0;
 
 // Scroll untuk layar teks panjang
 static int      textScrollY=0;
+static int      aiModeSel=0;
+static char     aiPrompt[128] = {0};
+static int      aiPromptLen = 0;
+static String   aiResponseText = "";
+static String   geminiApiKey = "";
+static String   groqApiKey = "";
+static int      aiMode = 0; // 0: Subaru, 1: Standard, 2: Groq
+
 
 // ════════════════════════════════════════════════════════════════
 // MENU v9.0 — 16 ITEM
@@ -864,35 +873,26 @@ const char* gameSub[]  = {"Ultimate 5x5", "Grid Combat", "Classic Bird", "Grid R
 
 static int menuSel = 0;
 static const char* menuItems[] = {
-  "VIDEO", "TRIVIA",
+  "AI CHAT", "VIDEO", "TRIVIA",
   "FILE MANAGER", "WIFI", "SETTINGS", "POWER",
   "BERITA RSS", "HACKER NEWS",
   "DAD JOKE", "CHUCK NORRIS", "BORED",
   "STOIC QUOTE", "NUMBER FACT",
   "ISS TRACKER", "PEOPLE IN SPACE",
-  "APOD — NASA",
+  "APOD NASA",
   "GAMES",
 };
 static const char* menuSubtitle[] = {
-  "putar .mjpeg SD",
-  "quiz online",
-  "browse & kelola SD",
-  "scan & sambungkan",
-  "brightness & info",
-  "restart / sleep",
-  "baca berita RSS",
-  "top 5 HackerNews",
-  "lelucon bapak-bapak",
-  "fakta Chuck Norris",
-  "ide saat bosan",
-  "kutipan bijak stoik",
-  "fakta unik angka",
-  "posisi ISS real-time",
-  "astronaut di orbit",
+  "tanya Gemini & Groq", "putar .mjpeg SD", "quiz online",
+  "browse & kelola SD", "scan & sambungkan", "brightness & info", "restart / sleep",
+  "baca berita RSS", "top 5 HackerNews",
+  "lelucon bapak-bapak", "fakta Chuck Norris", "ide saat bosan",
+  "kutipan bijak stoik", "fakta unik angka",
+  "posisi ISS real-time", "astronaut di orbit",
   "foto luar angkasa NASA",
-  "4 mini games",
+  "9 mini games",
 };
-#define MENU_N 17
+#define MENU_N 18
 
 static uint32_t _barPulseT = 0;
 static uint8_t  _barAlpha  = 160;
@@ -1302,14 +1302,14 @@ static bool kbCaps=false;
 int  kbRowLen(int r){if(r==4)return 4;return strlen(kbCaps?KB_UP[r]:KB_LO[r]);}
 char kbChar(int r,int c){if(r>=4)return 0;return(kbCaps?KB_UP[r]:KB_LO[r])[c];}
 
-void drawKeyboard() {
-  mainBuf.fillScreen(C_BG); uiHeader("PASSWORD");
+void drawKeyboard(const char* title, const char* buffer, int len, bool isPass) {
+  mainBuf.fillScreen(C_BG); uiHeader(title);
   uiCard(4,28,SCR_W-8,22,C_MGRAY);
   mainBuf.setFont(&fonts::Font2); mainBuf.setTextColor(C_WHITE);
   mainBuf.setCursor(10,35);
-  int dispStart=wifiPassLen>20?wifiPassLen-17:0;
+  int dispStart=len>20?len-17:0;
   if(dispStart>0) mainBuf.print("...");
-  for(int i=dispStart;i<wifiPassLen;i++) mainBuf.print('*');
+  for(int i=dispStart;i<len;i++) mainBuf.print(isPass ? '*' : buffer[i]);
   mainBuf.print('_');
   mainBuf.setTextColor(kbCaps?C_WHITE:C_DGRAY);
   mainBuf.setCursor(SCR_W-40,35); mainBuf.print(kbCaps?"CAPS":"caps");
@@ -1338,7 +1338,7 @@ void drawKeyboard() {
   }
 }
 
-int handleKeyboard() {
+int handleKeyboard(char* buffer, int& len, int maxLen) {
   bool changed=false; int cols=kbRowLen(kbRow);
   if(btnPressed(B_UP)){kbRow=(kbRow+4)%5;kbCol=min(kbCol,kbRowLen(kbRow)-1);changed=true;}
   if(btnPressed(B_DW)){kbRow=(kbRow+1)%5;kbCol=min(kbCol,kbRowLen(kbRow)-1);changed=true;}
@@ -1347,11 +1347,11 @@ int handleKeyboard() {
   if(btnPressed(B_SEL)){
     if(kbRow==4){
       if(kbCol==0){kbCaps=!kbCaps;changed=true;}
-      else if(kbCol==1&&wifiPassLen<63){wifiPassword[wifiPassLen++]=' ';wifiPassword[wifiPassLen]=0;changed=true;}
-      else if(kbCol==2&&wifiPassLen>0){wifiPassword[--wifiPassLen]=0;changed=true;}
+      else if(kbCol==1&&len<maxLen){buffer[len++]=' ';buffer[len]=0;changed=true;}
+      else if(kbCol==2&&len>0){buffer[--len]=0;changed=true;}
       else if(kbCol==3)return 2;
     } else {
-      if(wifiPassLen<63){wifiPassword[wifiPassLen++]=kbChar(kbRow,kbCol);wifiPassword[wifiPassLen]=0;changed=true;}
+      if(len<maxLen){buffer[len++]=kbChar(kbRow,kbCol);buffer[len]=0;changed=true;}
     }
   }
   return changed?1:0;
@@ -2548,6 +2548,7 @@ void setup() {
   appState=ST_MENU;
   drawMenu(); pushFrame();
   btnFlushAll();
+  loadAiKeys();
   Serial.println("[OK] Boot selesai v9.1");
 }
 
@@ -2567,6 +2568,100 @@ bool requireWifi(const char* featureName) {
 // ════════════════════════════════════════════════════════════════
 // LOOP
 // ════════════════════════════════════════════════════════════════
+
+
+
+
+
+// ════════════════════════════════════════════════════════════════
+// AI CHAT FUNCTIONS
+// ════════════════════════════════════════════════════════════════
+void loadAiKeys() {
+  if (!SD.begin(SD_CS)) return;
+  File file = SD.open("/api_keys.json", FILE_READ);
+  if (file) {
+    JsonDocument doc;
+    DeserializationError error = deserializeJson(doc, file);
+    if (!error) {
+      if (doc.containsKey("gemini_api_key")) geminiApiKey = doc["gemini_api_key"].as<String>();
+      if (doc.containsKey("groq_api_key")) groqApiKey = doc["groq_api_key"].as<String>();
+      geminiApiKey.trim(); groqApiKey.trim();
+    }
+    file.close();
+  }
+}
+
+void drawAIModeSelection() {
+  mainBuf.fillScreen(C_BG); uiHeader("SELECT AI MODE");
+  const char* modes[] = {"SUBARU AWA (Gemini)", "STANDARD AI (Gemini)", "GROQ CLOUD (Llama 3)"};
+  const char* descs[] = {"Friendly & Fun", "Professional & Precise", "Fast & Powerful"};
+  for(int i=0; i<3; i++) {
+    int y = 35 + i*40; bool sel = (i == aiModeSel);
+    mainBuf.fillRoundRect(10, y, SCR_W-20, 36, 8, sel ? C_XDGRAY : C_XXDGRAY);
+    mainBuf.drawRoundRect(10, y, SCR_W-20, 36, 8, sel ? C_WHITE : C_DGRAY);
+    mainBuf.setFont(&fonts::Font2); mainBuf.setTextColor(sel ? C_WHITE : C_MGRAY);
+    mainBuf.setCursor(22, y+4); mainBuf.print(modes[i]);
+    mainBuf.setFont(&fonts::Font2); mainBuf.setTextColor(C_DGRAY);
+    mainBuf.setCursor(22, y+20); mainBuf.print(descs[i]);
+  }
+  uiFooter("UP/DW:pilih  SEL:lanjut  L+R:back");
+}
+
+void fetchAiResponse() {
+  aiResponseText = "Thinking...";
+  mainBuf.fillScreen(C_BG); uiHeader("AI CHAT");
+  uiCenteredText("Mencari jawaban...", 74, C_MGRAY, &fonts::Font2);
+  pushFrame();
+
+  if (aiMode == 0 || aiMode == 1) { // Gemini
+    if (geminiApiKey == "" || geminiApiKey.startsWith("PASTE")) { aiResponseText = "Error: Gemini API Key not set in /api_keys.json"; return; }
+    WiFiClientSecure client; client.setInsecure();
+    HTTPClient http;
+    String url = "https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=" + geminiApiKey;
+    http.begin(client, url);
+    http.addHeader("Content-Type", "application/json");
+    http.setTimeout(25000);
+    String sysPrompt = (aiMode == 0) ? "Jawablah dengan gaya bahasa yang ramah, sedikit santai, gunakan emoji, dan panggil aku 'kakak'. " : "Answer professionally and concisely. ";
+    String prompt = sysPrompt + String(aiPrompt);
+    prompt.replace("\\", "\\\\"); prompt.replace("\"", "\\\"");
+    String payload = "{\"contents\":[{\"parts\":[{\"text\":\"" + prompt + "\"}]}]}";
+    int code = http.POST(payload);
+    if (code == 200) {
+      JsonDocument doc; deserializeJson(doc, http.getString());
+      aiResponseText = doc["candidates"][0]["content"]["parts"][0]["text"].as<String>();
+    } else { aiResponseText = "HTTP Error: " + String(code); }
+    http.end();
+  } else { // Groq
+    if (groqApiKey == "" || groqApiKey.startsWith("PASTE")) { aiResponseText = "Error: Groq API Key not set in /api_keys.json"; return; }
+    WiFiClientSecure client; client.setInsecure();
+    HTTPClient http;
+    http.begin(client, "https://api.groq.com/openai/v1/chat/completions");
+    http.addHeader("Content-Type", "application/json");
+    http.addHeader("Authorization", "Bearer " + groqApiKey);
+    http.setTimeout(25000);
+    String prompt = String(aiPrompt);
+    prompt.replace("\\", "\\\\"); prompt.replace("\"", "\\\"");
+    String payload = "{\"model\":\"llama-3.3-70b-versatile\",\"messages\":[{\"role\":\"user\",\"content\":\"" + prompt + "\"}]}";
+    int code = http.POST(payload);
+    if (code == 200) {
+      JsonDocument doc; deserializeJson(doc, http.getString());
+      aiResponseText = doc["choices"][0]["message"]["content"].as<String>();
+    } else { aiResponseText = "HTTP Error: " + String(code); }
+    http.end();
+  }
+  aiResponseText.trim();
+  if(aiResponseText.length() == 0) aiResponseText = "No response from AI.";
+}
+
+static int aiMaxScroll = 0;
+void drawAiResponse() {
+  mainBuf.fillScreen(C_BG); uiHeader("AI RESPONSE");
+  mainBuf.setFont(&fonts::Font2); mainBuf.setTextColor(C_WHITE);
+  mainBuf.setClipRect(5, 26, SCR_W-10, SCR_H-44);
+  aiMaxScroll = uiWrapScroll(aiResponseText, 10, 30 - (textScrollY % 13), SCR_W-20, SCR_H-56, textScrollY, C_WHITE, 13);
+  mainBuf.clearClipRect();
+  uiFooter("UP/DW:scroll  SEL:tanya lagi  L+R:back");
+}
 
 void loop() {
 
@@ -2593,76 +2688,113 @@ void loop() {
   }
 
   switch(appState) {
+    case ST_AI_MODE:
+      if(btnPressed(B_UP)){aiModeSel=(aiModeSel+2)%3;drawAIModeSelection();pushFrame();}
+      if(btnPressed(B_DW)){aiModeSel=(aiModeSel+1)%3;drawAIModeSelection();pushFrame();}
+      if(btnPressed(B_SEL)){
+        aiMode = aiModeSel;
+        memset(aiPrompt, 0, sizeof(aiPrompt)); aiPromptLen = 0;
+        kbRow=1; kbCol=4; kbCaps=false;
+        appState = ST_AI_CHAT_INPUT; drawKeyboard("TANYA AI", aiPrompt, aiPromptLen, false); pushFrame(); btnFlushAll();
+      }
+      break;
+
+    case ST_AI_CHAT_INPUT: {
+      int kb = handleKeyboard(aiPrompt, aiPromptLen, 127);
+      if(kb == 2) {
+        if(aiPromptLen > 0) {
+          fetchAiResponse();
+          textScrollY = 0;
+          appState = ST_AI_CHAT_RES; drawAiResponse(); pushFrame(); btnFlushAll();
+        }
+      } else if(kb == 1) {
+        drawKeyboard("TANYA AI", aiPrompt, aiPromptLen, false); pushFrame();
+      }
+      break;
+    }
+
+    case ST_AI_CHAT_RES:
+      if(btnHeld(B_UP)){textScrollY=max(0, textScrollY-2);drawAiResponse();pushFrame();}
+      if(btnHeld(B_DW)){textScrollY+=2;drawAiResponse();pushFrame();}
+      if(btnPressed(B_SEL)){
+        memset(aiPrompt, 0, sizeof(aiPrompt)); aiPromptLen = 0;
+        appState = ST_AI_CHAT_INPUT; drawKeyboard("TANYA AI", aiPrompt, aiPromptLen, false); pushFrame(); btnFlushAll();
+      }
+      break;
+
 
     // ── MENU UTAMA ──
     case ST_MENU:
       if(btnPressed(B_UP)){menuSel=(menuSel+MENU_N-1)%MENU_N;drawMenu();pushFrame();}
       if(btnPressed(B_DW)){menuSel=(menuSel+1)%MENU_N;drawMenu();pushFrame();}
       if(btnPressed(B_SEL)) {
-        switch(menuSel) {
+                switch(menuSel) {
           case 0:
-            appState=ST_VIDEO_LIST; videoSel=0; drawVideoList(); pushFrame(); btnFlushAll(); break;
+            if(!requireWifi("AI CHAT")) break;
+            appState=ST_AI_MODE; aiModeSel=0; drawAIModeSelection(); pushFrame(); btnFlushAll(); break;
           case 1:
+            appState=ST_VIDEO_LIST; videoSel=0; drawVideoList(); pushFrame(); btnFlushAll(); break;
+          case 2:
             if(!requireWifi("TRIVIA")) break;
             appState=ST_TRIVIA_SETUP; triviaSetupRow=0; drawTriviaSetup(); pushFrame(); btnFlushAll(); break;
-          case 2:
-            appState=ST_FILE_MGR; fmScanDir(fmCurrentPath); drawFileManager(); pushFrame(); btnFlushAll(); break;
           case 3:
-            appState=ST_WIFI_SCAN; scanWifi(); drawWifiList(); pushFrame(); btnFlushAll(); break;
+            appState=ST_FILE_MGR; fmScanDir(fmCurrentPath); drawFileManager(); pushFrame(); btnFlushAll(); break;
           case 4:
-            appState=ST_SETTINGS; drawSettings(); pushFrame(); btnFlushAll(); break;
+            appState=ST_WIFI_SCAN; scanWifi(); drawWifiList(); pushFrame(); btnFlushAll(); break;
           case 5:
-            appState=ST_POWER_MENU; powerSel=2; drawPowerMenu(); pushFrame(); btnFlushAll(); break;
+            appState=ST_SETTINGS; drawSettings(); pushFrame(); btnFlushAll(); break;
           case 6:
+            appState=ST_POWER_MENU; powerSel=2; drawPowerMenu(); pushFrame(); btnFlushAll(); break;
+          case 7:
             appState=ST_RSS_READER;
             if(wifiConnected&&rssNeedsRefresh()&&!rssFetching) rssFetchAll();
             drawRssReader(); pushFrame(); btnFlushAll(); break;
-          case 7: // HACKER NEWS
+          case 8: // HACKER NEWS
             if(!requireWifi("HACKER NEWS")) break;
             appState=ST_HACKER_NEWS; textScrollY=0;
             if(!hnFetched){ drawLoading("HACKER NEWS"); fetchHackerNews(); }
             drawHackerNews(); pushFrame(); btnFlushAll(); break;
-          case 8: // DAD JOKE
+          case 9: // DAD JOKE
             if(!requireWifi("DAD JOKE")) break;
             appState=ST_JOKES; jokeSource=0; textScrollY=0;
             if(!jokeFetched){ drawLoading("DAD JOKE"); pushFrame(); fetchJoke(); }
             drawJokes(); pushFrame(); btnFlushAll(); break;
-          case 9: // CHUCK NORRIS
+          case 10: // CHUCK NORRIS
             if(!requireWifi("CHUCK NORRIS")) break;
             appState=ST_JOKES; jokeSource=1; jokeFetched=false; textScrollY=0;
             drawLoading("CHUCK NORRIS"); pushFrame(); fetchJoke();
             drawJokes(); pushFrame(); btnFlushAll(); break;
-          case 10: // BORED
+          case 11: // BORED
             if(!requireWifi("AKTIVITAS")) break;
             appState=ST_BORED; textScrollY=0;
             if(!boredFetched){ drawLoading("AKTIVITAS ACAK"); pushFrame(); fetchBored(); }
             drawBored(); pushFrame(); btnFlushAll(); break;
-          case 11: // STOIC QUOTE
+          case 12: // STOIC QUOTE
             if(!requireWifi("STOIC QUOTE")) break;
             appState=ST_STOIC; textScrollY=0;
             if(!stoicFetched){ drawLoading("STOIC QUOTE"); pushFrame(); fetchStoic(); }
             drawStoic(); pushFrame(); btnFlushAll(); break;
-          case 12: // NUMBER FACT
+          case 13: // NUMBER FACT
             if(!requireWifi("NUMBER FACT")) break;
             appState=ST_NUMBER_FACT; textScrollY=0;
             if(!numFactFetched){ drawLoading("NUMBER FACT"); pushFrame(); fetchNumberFact(); }
             drawNumberFact(); pushFrame(); btnFlushAll(); break;
-          case 13: // ISS TRACKER
+          case 14: // ISS TRACKER
             if(!requireWifi("ISS TRACKER")) break;
             appState=ST_ISS_TRACKER;
-            if(!issFetched){ drawLoading("ISS TRACKER","Mengambil posisi ISS..."); pushFrame(); fetchISSNow(); }
+            if(!issFetched){ drawLoading("ISS TRACKER"); fetchISSNow(); }
             drawISS(); pushFrame(); btnFlushAll(); break;
-          case 14: // PEOPLE IN SPACE
+          case 15: // PEOPLE IN SPACE
             if(!requireWifi("PEOPLE IN SPACE")) break;
             appState=ST_PEOPLE_SPACE;
-            if(!astronautFetched){ drawLoading("PEOPLE IN SPACE"); pushFrame(); fetchPeopleInSpace(); }
+            if(!astronautFetched){ drawLoading("PEOPLE IN SPACE"); fetchPeopleInSpace(); }
             drawPeopleInSpace(); pushFrame(); btnFlushAll(); break;
-          case 15: // APOD
+          case 16: // APOD
             if(!requireWifi("APOD NASA")) break;
-            appState=ST_APOD; textScrollY=0;
-            if(!apodFetched){ drawLoading("APOD — NASA","Mengambil dari NASA..."); pushFrame(); fetchAPOD(); }
+            appState=ST_APOD;
+            if(!apodFetched){ drawLoading("APOD NASA"); fetchAPOD(); }
             drawAPOD(); pushFrame(); btnFlushAll(); break;
-          case 16:
+          case 17:
             appState=ST_GAME_MENU; drawGameMenu(); pushFrame(); btnFlushAll(); break;
         }
         break;
@@ -2687,12 +2819,12 @@ void loop() {
       if(btnPressed(B_DW)){if(wifiSel<(int)wifiSSIDs.size()-1)wifiSel++;drawWifiList();pushFrame();}
       if(btnPressed(B_SEL)){
         if(wifiSSIDs.empty()){scanWifi();drawWifiList();pushFrame();}
-        else{ memset(wifiPassword,0,sizeof(wifiPassword));wifiPassLen=0;kbRow=1;kbCol=4;kbCaps=false; appState=ST_WIFI_PASS; drawKeyboard(); pushFrame(); btnFlushAll(); }
+        else{ memset(wifiPassword,0,sizeof(wifiPassword));wifiPassLen=0;kbRow=1;kbCol=4;kbCaps=false; appState=ST_WIFI_PASS; drawKeyboard("PASSWORD", wifiPassword, wifiPassLen, true); pushFrame(); btnFlushAll(); }
       }
       ledPulse(1000); break;
 
     case ST_WIFI_PASS: {
-      int kb=handleKeyboard();
+      int kb=handleKeyboard(wifiPassword, wifiPassLen, 63);
       if(kb==2){
         appState=ST_WIFI_CONN;
         bool ok=connectWifi(wifiSSIDs[wifiSel].c_str(),wifiPassword);
@@ -2704,7 +2836,7 @@ void loop() {
         }
         drawWifiResult(ok,wifiSSIDs[wifiSel].c_str()); pushFrame(); btnFlushAll();
       }
-      else if(kb==1){drawKeyboard();pushFrame();}
+      else if(kb==1){drawKeyboard("PASSWORD", wifiPassword, wifiPassLen, true);pushFrame();}
       break;
     }
     case ST_WIFI_CONN:
@@ -2969,9 +3101,9 @@ void loop() {
     case ST_SIMON_MODE: simonInit(); appState=ST_SIMON; break;
     case ST_SIMON: handleSimon(); break;
     case ST_SIMON_OVER: drawSimon(); pushFrame(); if(btnPressed(B_SEL)) simonInit(); break;
-    case ST_SUDOKU_MODE: sudokuInit(); appState=ST_SUDOKU; break;
+    case ST_SUDOKU_MODE: sudoInit(); appState=ST_SUDOKU; break;
     case ST_SUDOKU: handleSudoku(); break;
-    case ST_SUDOKU_OVER: drawSudoku(); pushFrame(); if(btnPressed(B_SEL)) sudokuInit(); break;
+    case ST_SUDOKU_OVER: drawSudoku(); pushFrame(); if(btnPressed(B_SEL)) sudoInit(); break;
   }
 
   delay(4);
