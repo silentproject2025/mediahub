@@ -604,7 +604,7 @@ bool rssFetchFeed(int feedIdx) {
   int code = http.GET();
   if (code!=200) { http.end(); return false; }
   WiFiClient* stream = http.getStreamPtr();
-  String xml=""; int len=http.getSize(); uint8_t chunk[513]; int bytesRead=0;
+  String xml=""; xml.reserve(16384); int len=http.getSize(); uint8_t chunk[513]; int bytesRead=0;
   while (http.connected() && (len>0||len==-1)) {
     int avail=stream->available();
     if (avail>0) {
@@ -613,7 +613,7 @@ bool rssFetchFeed(int feedIdx) {
       chunk[actual] = 0; xml += (char*)chunk;
       bytesRead += actual; if(len>0) len-=actual;
     }
-    if (bytesRead>32000) break;
+    if (bytesRead>16000) break;
     delay(1);
   }
   http.end();
@@ -659,8 +659,9 @@ void rssTickerUpdate() {
 }
 
 bool rssNeedsRefresh() {
-  if (!rssFetched) return true;
-  return (millis()-rssLastFetch) > (uint32_t)(RSS_REFRESH_MIN*60000UL);
+  uint32_t elapsed = millis() - rssLastFetch;
+  if (!rssFetched) return elapsed > 15000;
+  return elapsed > (uint32_t)(RSS_REFRESH_MIN*60000UL);
 }
 
 // ════════════════════════════════════════════════════════════════
@@ -2624,6 +2625,7 @@ void drawHNComments() {
 // SETUP
 // ════════════════════════════════════════════════════════════════
 void setup() {
+  rssLastFetch = millis();
   Serial.begin(115200);
   delay(500);
   Serial.println("\n[BOOT] MediaHub v9.1");
@@ -2727,7 +2729,6 @@ bool requireWifi(const char* featureName) {
 // AI CHAT FUNCTIONS
 // ════════════════════════════════════════════════════════════════
 void loadAiKeys() {
-  if (!SD.begin(SD_CS)) return;
   File file = SD.open("/api_keys.json", FILE_READ);
   if (file) {
     JsonDocument doc;
@@ -2987,7 +2988,7 @@ void loop() {
         if(ok){
           // [NEW v9.1] Simpan kredensial ke NVS
           wifiPrefsSave(wifiSSIDs[wifiSel].c_str(), wifiPassword);
-          clockSyncNTP(); rssLastFetch=0;
+          clockSyncNTP(); rssLastFetch=millis();
         }
         drawWifiResult(ok,wifiSSIDs[wifiSel].c_str()); pushFrame(); btnFlushAll();
       }
