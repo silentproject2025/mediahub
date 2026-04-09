@@ -264,8 +264,6 @@ void initColors() {
 #define BR_SMOOTH_STEP    3
 
 // ════════════════════════════════════════════════════════════════
-// ════════════════════════════════════════════════════════════════
-
 
 // ════════════════════════════════════════════════════════════════
 // MOOD LAMP CONFIG
@@ -569,6 +567,10 @@ String xmlExtract(const String& xml, const String& tag) {
 }
 
 
+
+
+
+
 // ════════════════════════════════════════════════════════════════
 // FILE MANAGER STATE
 // ════════════════════════════════════════════════════════════════
@@ -803,7 +805,6 @@ static int menuSel = 0;
 static const char* menuItems[] = {
   "AI CHAT", "VIDEO", "TRIVIA",
   "FILE MANAGER", "WIFI", "SETTINGS", "POWER",
-  "HACKER NEWS",
   "DAD JOKE", "CHUCK NORRIS", "BORED",
   "STOIC QUOTE", "NUMBER FACT",
   "ISS TRACKER", "PEOPLE IN SPACE",
@@ -814,7 +815,6 @@ static const char* menuItems[] = {
 static const char* menuSubtitle[] = {
   "tanya Gemini & Groq", "putar .mjpeg SD", "quiz online",
   "browse & kelola SD", "scan & sambungkan", "brightness & info", "restart / sleep",
-  "top 5 HackerNews",
   "lelucon bapak-bapak", "fakta Chuck Norris", "ide saat bosan",
   "kutipan bijak stoik", "fakta unik angka",
   "posisi ISS real-time", "astronaut di orbit",
@@ -1080,6 +1080,14 @@ void drawMenu() {
     mainBuf.setTextColor(C_DGRAY); mainBuf.setCursor(SCR_W-34,7); mainBuf.print("noWF");
   }
 
+  } else if(wifiConnected) {
+    mainBuf.fillRect(0,SCR_H,SCR_W,TICKER_H,C_XXDGRAY);
+    mainBuf.drawFastHLine(0,SCR_H,SCR_W,C_DGRAY);
+    mainBuf.setFont(&fonts::Font2); mainBuf.setTextColor(C_DGRAY);
+    const char* rssMsg = rssFetching ? "RSS: mengambil..." : "RSS: belum ada";
+    mainBuf.setCursor(4,SCR_H+3); mainBuf.print(rssMsg);
+  }
+
   // Daftar Menu — SMOOTH ROUNDED
   const int VIS = 6;
   if(menuSel < menuScrollTop) menuScrollTop = menuSel;
@@ -1087,7 +1095,7 @@ void drawMenu() {
   menuScrollTop = constrain(menuScrollTop, 0, MENU_N - VIS);
 
   const int MENU_Y     = 23;
-  const int MENU_BOT   = SCR_H - 2;
+  const int MENU_BOT   = SCR_H - 18;
   const int MENU_H     = MENU_BOT - MENU_Y;
   const int ITEM_H_SEL = 30;
   const int ITEM_H_NRM = 16;
@@ -1606,9 +1614,46 @@ void drawFileManager() {
 }
 
 // ════════════════════════════════════════════════════════════════
+// RSS READER UI
 // ════════════════════════════════════════════════════════════════
 
 // ════════════════════════════════════════════════════════════════
+// TRIVIA
+// ════════════════════════════════════════════════════════════════
+static int _hexVal(char c){if(c>='0'&&c<='9')return c-'0';if(c>='A'&&c<='F')return c-'A'+10;if(c>='a'&&c<='f')return c-'a'+10;return 0;}
+String urlDecode(const String& s){
+  String o;o.reserve(s.length());
+  for(int i=0;i<(int)s.length();i++){char c=s[i];if(c=='%'&&i+2<(int)s.length()){o+=(char)((_hexVal(s[i+1])<<4)|_hexVal(s[i+2]));i+=2;}else if(c=='+')o+=' ';else o+=c;}
+  return o;
+}
+String decodeTrivia(const String& s){return htmlDecode(urlDecode(s));}
+
+void drawTriviaSetup(){
+  mainBuf.fillScreen(C_BG); uiHeader("TRIVIA SETUP");
+  const int ROW_Y[]={28,56,84,114},ROW_H=22;
+  char valCat[32],valAmt[8],valTime[12];
+  snprintf(valCat,sizeof(valCat),"%s",TRIVIA_CATS[triviaSetCatIdx].name);
+  snprintf(valAmt,sizeof(valAmt),"%d soal",TRIVIA_AMOUNTS[triviaSetAmtIdx]);
+  snprintf(valTime,sizeof(valTime),"%d detik",TRIVIA_TIMES[triviaSetTimeIdx]);
+  const char* LABELS[]={"Kategori","Jumlah Soal","Waktu/Soal",""};
+  const char* VALS[]={valCat,valAmt,valTime,""};
+  for(int r=0;r<3;r++){
+    bool sel=(triviaSetupRow==r); int y=ROW_Y[r];
+    mainBuf.fillRoundRect(4,y,SCR_W-8,ROW_H,5,sel?C_XDGRAY:C_BG);
+    mainBuf.drawRoundRect(4,y,SCR_W-8,ROW_H,5,sel?C_MGRAY:C_DGRAY);
+    mainBuf.setFont(&fonts::Font2);
+    mainBuf.setTextColor(sel?C_WHITE:C_LGRAY); mainBuf.setCursor(10,y+5); mainBuf.print(LABELS[r]);
+    String valStr=String("< ")+VALS[r]+" >";
+    if(mainBuf.textWidth(valStr.c_str())>160){String s=String(VALS[r]);if(s.length()>14)s=s.substring(0,13)+"~";valStr=String("< ")+s+" >";}
+    int tw2=mainBuf.textWidth(valStr.c_str());
+    mainBuf.setTextColor(sel?C_LGRAY:C_MGRAY); mainBuf.setCursor(SCR_W-tw2-8,y+5); mainBuf.print(valStr);
+  }
+  {
+    bool sel=(triviaSetupRow==3); int y=ROW_Y[3];
+    mainBuf.fillRoundRect(44,y,SCR_W-88,24,8,sel?C_WHITE:C_XDGRAY);
+    mainBuf.drawRoundRect(44,y,SCR_W-88,24,8,sel?C_WHITE:C_MGRAY);
+    mainBuf.setFont(&fonts::Font2); mainBuf.setTextColor(sel?C_BG:C_WHITE);
+    const char* lbl="MULAI QUIZ"; int tw2=mainBuf.textWidth(lbl);
     mainBuf.setCursor((SCR_W-tw2)/2,y+6); mainBuf.print(lbl);
   }
   uiFooter("UP/DW:baris  L/R:ubah  SEL:ok");
@@ -2788,6 +2833,7 @@ void loop() {
         if(ok){
           // [NEW v9.1] Simpan kredensial ke NVS
           wifiPrefsSave(wifiSSIDs[wifiSel].c_str(), wifiPassword);
+          clockSyncNTP();
         }
         drawWifiResult(ok,wifiSSIDs[wifiSel].c_str()); pushFrame(); btnFlushAll();
       }
@@ -2828,6 +2874,8 @@ void loop() {
         if(btnPressed(B_SEL)){FsEntry& e=fmEntries[fmSel];String fullPath=(fmCurrentPath.endsWith("/")?fmCurrentPath:fmCurrentPath+"/")+e.name;fmDeletePath(fullPath);fmConfirmDelete=false;fmScanDir(fmCurrentPath);if(fmSel>=(int)fmEntries.size())fmSel=max(0,(int)fmEntries.size()-1);drawFileManager();pushFrame();}
         if(btnPressed(B_L)){fmConfirmDelete=false;drawFileManager();pushFrame();}
       }
+      ledPulse(1200); break;
+
       ledPulse(1200); break;
 
     case ST_TRIVIA_LOAD:
