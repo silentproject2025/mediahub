@@ -359,6 +359,26 @@ static SPIClass          sdSPI(HSPI);
 static MjpegClass        mjpeg;
 static Preferences       prefs;
 
+// ════════════════════════════════════════════════════════════════
+// CAMERA STREAM STATE
+// ════════════════════════════════════════════════════════════════
+static const char* camStreamUrl = "http://192.168.4.1/stream";
+static LGFX_Sprite* camSprites[2] = {nullptr, nullptr};
+static uint8_t drawBufIdx = 0;
+static uint8_t showBufIdx = 1;
+static bool camStreaming = false;
+static HTTPClient camHttp;
+static WiFiClient camClient;
+static JPEGDEC camJpeg;
+static uint32_t camLastFrameT = 0;
+static uint32_t camFrameCount = 0;
+static uint32_t camFps = 0;
+
+int camJpegDraw(JPEGDRAW *p) {
+  if (!camSprites[drawBufIdx]) return 0;
+  camSprites[drawBufIdx]->pushImage(p->x, p->y, p->iWidth, p->iHeight, p->pPixels);
+  return 1;
+}
 static uint8_t  *mjpeg_buf  = nullptr;
 static uint16_t *output_buf = nullptr;
 
@@ -394,7 +414,7 @@ enum AppState {
   ST_PEOPLE_SPACE,
   ST_HACKER_NEWS,
   ST_AI_MODE, ST_AI_CHAT_INPUT, ST_AI_CHAT_RES,
-  ST_HN_COMMENTS,    // [NEW v9.1] Layar komentar HN
+  ST_HN_COMMENTS, ST_CAMERA_STREAM,
   ST_GAME_MENU, ST_TICTACTOE_MODE, ST_TICTACTOE, ST_TICTACTOE_OVER,
   ST_TANK_MODE, ST_TANK, ST_TANK_OVER,
   ST_FLAPPY_MODE, ST_FLAPPY, ST_FLAPPY_OVER,
@@ -880,6 +900,7 @@ static const char* menuItems[] = {
   "STOIC QUOTE", "NUMBER FACT",
   "ISS TRACKER", "PEOPLE IN SPACE",
   "APOD NASA",
+  "CAMERA STREAM",
   "GAMES",
 };
 static const char* menuSubtitle[] = {
@@ -890,9 +911,10 @@ static const char* menuSubtitle[] = {
   "kutipan bijak stoik", "fakta unik angka",
   "posisi ISS real-time", "astronaut di orbit",
   "foto luar angkasa NASA",
+  "IP Cam receiver",
   "9 mini games",
 };
-#define MENU_N 18
+#define MENU_N 19
 
 static uint32_t _barPulseT = 0;
 static uint8_t  _barAlpha  = 160;
@@ -1244,6 +1266,118 @@ void drawMenu() {
 // ════════════════════════════════════════════════════════════════
 // WIFI UI
 // ════════════════════════════════════════════════════════════════
+
+// ════════════════════════════════════════════════════════════════
+// CAMERA STREAM FUNCTIONS
+// ════════════════════════════════════════════════════════════════
+void camStop() {
+  camStreaming = false;
+  camHttp.end();
+  for(int i=0; i<2; i++) {
+    if(camSprites[i]) {
+      camSprites[i]->deleteSprite();
+      delete camSprites[i];
+      camSprites[i] = nullptr;
+    }
+  }
+  ledSet(0,0,0);
+}
+
+bool camInit() {
+  uiHeader("CONNECTING CAM...");
+  pushFrame();
+
+  for(int i=0; i<2; i++) {
+    camSprites[i] = new LGFX_Sprite(&tft);
+    camSprites[i]->setPsram(true);
+    if(!camSprites[i]->createSprite(SCR_W, SCR_H)) {
+      camSprites[i]->setPsram(false);
+      if(!camSprites[i]->createSprite(SCR_W, SCR_H)) {
+        camStop(); return false;
+      }
+    }
+    camSprites[i]->fillScreen(C_BLACK);
+  }
+
+  camHttp.begin(camClient, camStreamUrl);
+  camHttp.setTimeout(5000);
+  int code = camHttp.GET();
+  if(code == 200) {
+    camStreaming = true;
+    camLastFrameT = millis();
+    camFrameCount = 0;
+    ledSet(0,0,255);
+    return true;
+  } else {
+    camStop();
+    return false;
+  }
+}
+
+void camUpdate() {
+  if(!camStreaming) return;
+
+  WiFiClient* stream = camHttp.getStreamPtr();
+  if(!stream || !camClient.connected()) {
+    camStop(); appState = ST_MENU; drawMenu(); pushFrame(); return;
+  }
+
+  // Find JPEG start marker 0xFF 0xD8
+  uint8_t prev = 0;
+  bool foundStart = false;
+  uint32_t startWait = millis();
+  while(stream->available() && !foundStart && (millis() - startWait < 500)) {
+    uint8_t b = stream->read();
+    if(prev == 0xFF && b == 0xD8) { foundStart = true; break; }
+    prev = b;
+  }
+  if(!foundStart) return;
+
+  // Read JPEG frame
+  if(!mjpeg_buf) return;
+  mjpeg_buf[0] = 0xFF; mjpeg_buf[1] = 0xD8;
+  size_t size = 2;
+  bool foundEnd = false;
+  prev = 0;
+  while(stream->available() && size < MJPEG_BUF_SIZE - 1) {
+    uint8_t b = stream->read();
+    mjpeg_buf[size++] = b;
+    if(prev == 0xFF && b == 0xD9) { foundEnd = true; break; }
+    prev = b;
+  }
+
+  if(foundEnd && size > 100) {
+    // Decode to draw buffer
+    camSprites[drawBufIdx]->fillScreen(C_BLACK);
+    if(camJpeg.openRAM(mjpeg_buf, size, camJpegDraw)) {
+      camJpeg.setPixelType(RGB565_BIG_ENDIAN);
+      camJpeg.decode(0,0,0);
+      camJpeg.close();
+    }
+
+    // Overlay FPS on draw buffer
+    camFrameCount++;
+    uint32_t now = millis();
+    if(now - camLastFrameT >= 1000) {
+      camFps = camFrameCount;
+      camFrameCount = 0;
+      camLastFrameT = now;
+    }
+    camSprites[drawBufIdx]->setTextColor(C_WHITE);
+    camSprites[drawBufIdx]->setCursor(5, 5);
+    camSprites[drawBufIdx]->printf("FPS: %d", camFps);
+
+    // Push show buffer via DMA
+    tft.startWrite();
+    tft.pushImageDMA(0, 0, SCR_W, SCR_H, (lgfx::rgb565_t*)camSprites[drawBufIdx]->getBuffer());
+    tft.endWrite();
+
+    // Swap buffers
+    uint8_t tmp = drawBufIdx;
+    drawBufIdx = showBufIdx;
+    showBufIdx = tmp;
+  }
+}
 void scanWifi() {
   mainBuf.fillScreen(C_BG); uiHeader("WIFI SETUP");
   uiCenteredText("Scanning...",76,C_LGRAY,&fonts::Font2); pushFrame();
@@ -2673,7 +2807,7 @@ void loop() {
   if(appState==ST_MENU) rssTickerUpdate();
 
   // Global back combo
-  if(appState!=ST_MENU&&appState!=ST_SPLASH&&appState!=ST_POWER_MENU) {
+  if(appState!=ST_MENU&&appState!=ST_SPLASH&&appState!=ST_POWER_MENU&&appState!=ST_CAMERA_STREAM) {
     if(btnComboLR()){
       mainBuf.fillRoundRect(SCR_W/2-70,SCR_H/2-10,140,20,6,C_XDGRAY);
       mainBuf.drawRoundRect(SCR_W/2-70,SCR_H/2-10,140,20,6,C_MGRAY);
@@ -2795,6 +2929,11 @@ void loop() {
             if(!apodFetched){ drawLoading("APOD NASA"); fetchAPOD(); }
             drawAPOD(); pushFrame(); btnFlushAll(); break;
           case 17:
+            if(!requireWifi("CAMERA STREAM")) break;
+            appState=ST_CAMERA_STREAM;
+            if(!camInit()){ appState=ST_MENU; drawMenu(); pushFrame(); }
+            btnFlushAll(); break;
+          case 18:
             appState=ST_GAME_MENU; drawGameMenu(); pushFrame(); btnFlushAll(); break;
         }
         break;
@@ -2850,6 +2989,13 @@ void loop() {
       ledPulse(1200); break;
 
     case ST_VIDEO_PLAY: break;
+    case ST_CAMERA_STREAM:
+      camUpdate();
+      if(btnComboLR()){
+        camStop();
+        appState=ST_MENU; drawMenu(); pushFrame(); btnFlushAll();
+      }
+      break;
 
     case ST_FILE_MGR:
       if(!fmConfirmDelete){
