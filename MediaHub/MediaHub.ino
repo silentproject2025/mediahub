@@ -1637,10 +1637,10 @@ void drawTriviaSetup(){
 String decodeTrivia(String str) {
   String res = "";
   for (int i = 0; i < (int)str.length(); i++) {
-    if (str[i] == "%" && i + 2 < (int)str.length()) {
+    if (str[i] == '%' && i + 2 < (int)str.length()) {
       char c = (char)strtol(str.substring(i + 1, i + 3).c_str(), NULL, 16);
       res += c; i += 2;
-    } else if (str[i] == "+") res += " ";
+    } else if (str[i] == '+') res += " ";
     else res += str[i];
   }
   return res;
