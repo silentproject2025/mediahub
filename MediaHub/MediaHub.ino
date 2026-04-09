@@ -596,12 +596,16 @@ String xmlExtract(const String& xml, const String& tag) {
 
 bool rssFetchFeed(int feedIdx) {
   if (!WiFi.isConnected() || feedIdx<0 || feedIdx>=RSS_FEED_COUNT) return false;
+  Serial.printf("[RSS] Fetching %s...\n", RSS_FEEDS[feedIdx].name);
+  WiFiClientSecure client;
+  client.setInsecure();
   HTTPClient http;
-  http.begin(RSS_FEEDS[feedIdx].url);
+  http.begin(client, RSS_FEEDS[feedIdx].url);
   http.setTimeout(RSS_FETCH_TIMEOUT);
   http.addHeader("User-Agent","ESP32-MediaHub/9.1");
   http.addHeader("Accept","application/rss+xml,application/xml,text/xml");
   int code = http.GET();
+  Serial.printf("[RSS] HTTP Code: %d\n", code);
   if (code!=200) { http.end(); return false; }
   WiFiClient* stream = http.getStreamPtr();
   String xml=""; xml.reserve(16384); int len=http.getSize(); uint8_t chunk[513]; int bytesRead=0;
@@ -610,8 +614,12 @@ bool rssFetchFeed(int feedIdx) {
     if (avail>0) {
       int toRead=min(avail,(int)sizeof(chunk)-1);
       int actual=stream->readBytes(chunk,toRead);
-      chunk[actual] = 0; xml += (char*)chunk;
-      bytesRead += actual; if(len>0) len-=actual;
+      if (actual > 0) {
+        if (xml.length() + (size_t)actual < 16384) {
+          chunk[actual] = 0; xml += (char*)chunk;
+        }
+        bytesRead += actual; if(len>0) len-=actual;
+      }
     }
     if (bytesRead>16000) break;
     delay(1);
@@ -631,6 +639,7 @@ bool rssFetchFeed(int feedIdx) {
     }
     itemStart=xml.indexOf("<item>",itemEnd);
   }
+  Serial.printf("[RSS] Done. Added %d headlines.\n", added);
   return added>0;
 }
 
@@ -1830,7 +1839,8 @@ bool fetchTrivia(){
   char url[160]; int catId=TRIVIA_CATS[triviaSetCatIdx].id;
   if(catId>0) snprintf(url,sizeof(url),"https://opentdb.com/api.php?amount=1&category=%d&type=multiple&encode=url3986",catId);
   else snprintf(url,sizeof(url),"https://opentdb.com/api.php?amount=1&type=multiple&encode=url3986");
-  HTTPClient http; http.begin(url); http.setTimeout(10000);
+  WiFiClientSecure client; client.setInsecure();
+  HTTPClient http; http.begin(client, url); http.setTimeout(10000);
   int code=http.GET(); if(code!=200){http.end();return false;}
   String payload=http.getString(); http.end();
   DynamicJsonDocument doc(4096);
