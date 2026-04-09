@@ -174,6 +174,7 @@ void memoInit(); void drawMemory(); void handleMemory();
 void simonInit(); void drawSimon(); void handleSimon();
 void sudoInit(); void drawSudoku(); void handleSudoku();
 void loadAiKeys();
+void camSaveToFile(uint8_t* buf, size_t len);
 String decodeTrivia(String str);
 
 
@@ -370,6 +371,7 @@ static uint32_t camFrameCount = 0;
 static uint32_t camFps = 0;
 static size_t   camBufPtr = 0;
 static bool     camInFrame = false;
+static bool     camRequestCapture = false;
 
 int camJpegDraw(JPEGDRAW *p) {
   if (!camSprites[drawBufIdx]) return 0;
@@ -1159,6 +1161,22 @@ void drawMenu() {
 
 // ════════════════════════════════════════════════════════════════
 // CAMERA STREAM FUNCTIONS
+void camSaveToFile(uint8_t* buf, size_t len) {
+  if (!SD.exists("/captures")) {
+    SD.mkdir("/captures");
+  }
+  char filename[32];
+  snprintf(filename, sizeof(filename), "/captures/cam_%lu.jpg", (unsigned long)millis());
+  File f = SD.open(filename, FILE_WRITE);
+  if (f) {
+    f.write(buf, len);
+    f.close();
+    Serial.printf("[CAM] Captured: %s (%d bytes)\n", filename, (int)len);
+  } else {
+    Serial.println("[CAM] Capture failed: could not open file for writing");
+  }
+}
+
 // ════════════════════════════════════════════════════════════════
 void camStop() {
   camStreaming = false;
@@ -1251,6 +1269,16 @@ void camUpdate() {
               camJpeg.setPixelType(RGB565_LITTLE_ENDIAN);
               camJpeg.decode(0,0,0);
               camJpeg.close();
+            }
+            if (camRequestCapture) {
+              camSaveToFile(mjpeg_buf, camBufPtr);
+              camRequestCapture = false;
+              camSprites[drawBufIdx]->setFont(&fonts::Font4);
+              camSprites[drawBufIdx]->setTextColor(0x07E0); /* C_GREEN */
+              int tw = camSprites[drawBufIdx]->textWidth("CAPTURED");
+              camSprites[drawBufIdx]->setCursor((SCR_W - tw) / 2, SCR_H / 2 - 10);
+              camSprites[drawBufIdx]->print("CAPTURED");
+              ledPulse(200);
             }
 
             camFrameCount++;
@@ -2835,10 +2863,10 @@ void loop() {
       if(btnPressed(B_R)){moodLampEnabled=!moodLampEnabled;if(!moodLampEnabled)ledSet(0,0,0);drawVideoList();pushFrame();}
       if(btnPressed(B_SEL)&&!videoFiles.empty()){appState=ST_VIDEO_PLAY;playVideo(videoFiles[videoSel]);btnFlushAll();}
       ledPulse(1200); break;
-
     case ST_VIDEO_PLAY: break;
     case ST_CAMERA_STREAM:
       camUpdate();
+      if(btnPressed(B_SEL)) camRequestCapture = true;
       if(btnComboLR()){
         camStop();
         appState=ST_MENU; drawMenu(); pushFrame(); btnFlushAll();
