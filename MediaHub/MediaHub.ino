@@ -604,13 +604,13 @@ bool rssFetchFeed(int feedIdx) {
   int code = http.GET();
   if (code!=200) { http.end(); return false; }
   WiFiClient* stream = http.getStreamPtr();
-  String xml=""; int len=http.getSize(); uint8_t chunk[512]; int bytesRead=0;
+  String xml=""; int len=http.getSize(); uint8_t chunk[513]; int bytesRead=0;
   while (http.connected() && (len>0||len==-1)) {
     int avail=stream->available();
     if (avail>0) {
-      int toRead=min(avail,(int)sizeof(chunk));
+      int toRead=min(avail,(int)sizeof(chunk)-1);
       int actual=stream->readBytes(chunk,toRead);
-      xml += String((char*)chunk).substring(0,actual);
+      chunk[actual] = 0; xml += (char*)chunk;
       bytesRead += actual; if(len>0) len-=actual;
     }
     if (bytesRead>32000) break;
