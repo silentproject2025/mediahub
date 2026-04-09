@@ -373,6 +373,8 @@ static JPEGDEC camJpeg;
 static uint32_t camLastFrameT = 0;
 static uint32_t camFrameCount = 0;
 static uint32_t camFps = 0;
+static size_t   camBufPtr = 0;
+static bool     camInFrame = false;
 
 int camJpegDraw(JPEGDRAW *p) {
   if (!camSprites[drawBufIdx]) return 0;
@@ -1272,6 +1274,8 @@ void drawMenu() {
 // ════════════════════════════════════════════════════════════════
 void camStop() {
   camStreaming = false;
+  camInFrame = false;
+  camBufPtr = 0;
   camHttp.end();
   for(int i=0; i<2; i++) {
     if(camSprites[i]) {
@@ -1285,7 +1289,9 @@ void camStop() {
 
 bool camInit() {
   uiHeader("CONNECTING CAM...");
+  uiCenteredText(camStreamUrl, 80, C_DGRAY, &fonts::Font2);
   pushFrame();
+  Serial.printf("[CAM] Connecting to %s...\n", camStreamUrl);
 
   for(int i=0; i<2; i++) {
     camSprites[i] = new LGFX_Sprite(&tft);
@@ -1302,10 +1308,13 @@ bool camInit() {
   camHttp.begin(camClient, camStreamUrl);
   camHttp.setTimeout(5000);
   int code = camHttp.GET();
+  Serial.printf("[CAM] HTTP Code: %d\n", code);
   if(code == 200) {
     camStreaming = true;
     camLastFrameT = millis();
     camFrameCount = 0;
+    camBufPtr = 0;
+    camInFrame = false;
     ledSet(0,0,255);
     return true;
   } else {
@@ -1319,63 +1328,70 @@ void camUpdate() {
 
   WiFiClient* stream = camHttp.getStreamPtr();
   if(!stream || !camClient.connected()) {
+    Serial.println("[CAM] Stream disconnected");
     camStop(); appState = ST_MENU; drawMenu(); pushFrame(); return;
   }
 
-  // Find JPEG start marker 0xFF 0xD8
-  uint8_t prev = 0;
-  bool foundStart = false;
-  uint32_t startWait = millis();
-  while(stream->available() && !foundStart && (millis() - startWait < 500)) {
-    uint8_t b = stream->read();
-    if(prev == 0xFF && b == 0xD8) { foundStart = true; break; }
-    prev = b;
-  }
-  if(!foundStart) return;
+  int avail = stream->available();
+  if (avail <= 0) return;
 
-  // Read JPEG frame
-  if(!mjpeg_buf) return;
-  mjpeg_buf[0] = 0xFF; mjpeg_buf[1] = 0xD8;
-  size_t size = 2;
-  bool foundEnd = false;
-  prev = 0;
-  while(stream->available() && size < MJPEG_BUF_SIZE - 1) {
-    uint8_t b = stream->read();
-    mjpeg_buf[size++] = b;
-    if(prev == 0xFF && b == 0xD9) { foundEnd = true; break; }
-    prev = b;
-  }
+  static uint8_t chunk[2048];
+  int toRead = min(avail, (int)sizeof(chunk));
+  int readLen = stream->read(chunk, toRead);
 
-  if(foundEnd && size > 100) {
-    // Decode to draw buffer
-    camSprites[drawBufIdx]->fillScreen(C_BLACK);
-    if(camJpeg.openRAM(mjpeg_buf, size, camJpegDraw)) {
-      camJpeg.setPixelType(RGB565_BIG_ENDIAN);
-      camJpeg.decode(0,0,0);
-      camJpeg.close();
+  for (int i = 0; i < readLen; i++) {
+    uint8_t b = chunk[i];
+
+    if (!camInFrame) {
+      static uint8_t lastByte = 0;
+      if (lastByte == 0xFF && b == 0xD8) {
+        camInFrame = true;
+        if(mjpeg_buf) {
+            mjpeg_buf[0] = 0xFF;
+            mjpeg_buf[1] = 0xD8;
+        }
+        camBufPtr = 2;
+      }
+      lastByte = b;
+    } else {
+      if (mjpeg_buf && camBufPtr < MJPEG_BUF_SIZE) {
+        mjpeg_buf[camBufPtr++] = b;
+        if (camBufPtr > 2 && mjpeg_buf[camBufPtr-2] == 0xFF && mjpeg_buf[camBufPtr-1] == 0xD9) {
+          if (camBufPtr > 100) {
+            camSprites[drawBufIdx]->fillScreen(C_BLACK);
+            if(camJpeg.openRAM(mjpeg_buf, camBufPtr, camJpegDraw)) {
+              camJpeg.setPixelType(RGB565_BIG_ENDIAN);
+              camJpeg.decode(0,0,0);
+              camJpeg.close();
+            }
+
+            camFrameCount++;
+            uint32_t now = millis();
+            if(now - camLastFrameT >= 1000) {
+              camFps = camFrameCount;
+              camFrameCount = 0;
+              camLastFrameT = now;
+            }
+            camSprites[drawBufIdx]->setTextColor(C_WHITE);
+            camSprites[drawBufIdx]->setCursor(5, 5);
+            camSprites[drawBufIdx]->printf("FPS: %d", camFps);
+
+            tft.startWrite();
+            tft.pushImageDMA(0, 0, SCR_W, SCR_H, (lgfx::rgb565_t*)camSprites[drawBufIdx]->getBuffer());
+            tft.endWrite();
+
+            uint8_t tmp = drawBufIdx;
+            drawBufIdx = showBufIdx;
+            showBufIdx = tmp;
+          }
+          camInFrame = false;
+          camBufPtr = 0;
+        }
+      } else {
+        camInFrame = false;
+        camBufPtr = 0;
+      }
     }
-
-    // Overlay FPS on draw buffer
-    camFrameCount++;
-    uint32_t now = millis();
-    if(now - camLastFrameT >= 1000) {
-      camFps = camFrameCount;
-      camFrameCount = 0;
-      camLastFrameT = now;
-    }
-    camSprites[drawBufIdx]->setTextColor(C_WHITE);
-    camSprites[drawBufIdx]->setCursor(5, 5);
-    camSprites[drawBufIdx]->printf("FPS: %d", camFps);
-
-    // Push show buffer via DMA
-    tft.startWrite();
-    tft.pushImageDMA(0, 0, SCR_W, SCR_H, (lgfx::rgb565_t*)camSprites[drawBufIdx]->getBuffer());
-    tft.endWrite();
-
-    // Swap buffers
-    uint8_t tmp = drawBufIdx;
-    drawBufIdx = showBufIdx;
-    showBufIdx = tmp;
   }
 }
 void scanWifi() {
