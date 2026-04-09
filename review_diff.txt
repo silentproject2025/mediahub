@@ -1,3 +1,0 @@
---- MediaHub/MediaHub.ino
-+++ MediaHub/MediaHub.ino
-... (I'll just call the tool instead of making a fake diff)
