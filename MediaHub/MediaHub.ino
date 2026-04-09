@@ -264,20 +264,8 @@ void initColors() {
 #define BR_SMOOTH_STEP    3
 
 // ════════════════════════════════════════════════════════════════
-// RSS CONFIG
 // ════════════════════════════════════════════════════════════════
-#define RSS_REFRESH_MIN    5
-#define RSS_HEADLINE_MAX  20
-#define RSS_TICKER_SPEED  80
-#define RSS_FETCH_TIMEOUT 10000
 
-struct RssFeed { const char* name; const char* url; };
-static const RssFeed RSS_FEEDS[] = {
-  { "CNN ID",    "https://www.cnnindonesia.com/rss/feed.rss" },
-  { "Detik",     "https://rss.detik.com/index.php/detikcom"  },
-  { "Republika", "https://rss.republika.co.id/rss/all"       },
-};
-#define RSS_FEED_COUNT  3
 
 // ════════════════════════════════════════════════════════════════
 // MOOD LAMP CONFIG
@@ -406,7 +394,6 @@ enum AppState {
   ST_SETTINGS,
   ST_POWER_MENU,
   ST_FILE_MGR,
-  ST_RSS_READER,
   ST_ISS_TRACKER,
   ST_APOD,
   ST_STOIC,
@@ -536,19 +523,6 @@ void wifiPrefsClear() {
 }
 
 // ════════════════════════════════════════════════════════════════
-// RSS STATE
-// ════════════════════════════════════════════════════════════════
-struct RssHeadline { String title, source, link; };
-static std::vector<RssHeadline> rssHeadlines;
-static bool     rssFetching   = false;
-static bool     rssFetched    = false;
-static uint32_t rssLastFetch  = 0;
-static int      rssTickerX    = 0;
-static uint32_t rssTickerLast = 0;
-static String   rssTickerStr  = "";
-static int      rssTickerW    = 0;
-static int      rssViewSel    = 0;
-static int      rssScrollOff  = 0;
 
 String htmlDecode(const String& s) {
   String o = s;
@@ -594,84 +568,6 @@ String xmlExtract(const String& xml, const String& tag) {
   return htmlDecode(result);
 }
 
-bool rssFetchFeed(int feedIdx) {
-  if (!WiFi.isConnected() || feedIdx<0 || feedIdx>=RSS_FEED_COUNT) return false;
-  Serial.printf("[RSS] Fetching %s...\n", RSS_FEEDS[feedIdx].name);
-  WiFiClientSecure client;
-  client.setInsecure();
-  HTTPClient http;
-  http.begin(client, RSS_FEEDS[feedIdx].url);
-  http.setTimeout(RSS_FETCH_TIMEOUT);
-  http.addHeader("User-Agent","ESP32-MediaHub/9.1");
-  http.addHeader("Accept","application/rss+xml,application/xml,text/xml");
-  int code = http.GET();
-  Serial.printf("[RSS] HTTP Code: %d\n", code);
-  if (code!=200) { http.end(); return false; }
-  WiFiClient* stream = http.getStreamPtr();
-  String xml=""; xml.reserve(16384); int len=http.getSize(); uint8_t chunk[513]; int bytesRead=0;
-  while (http.connected() && (len>0||len==-1)) {
-    int avail=stream->available();
-    if (avail>0) {
-      int toRead=min(avail,(int)sizeof(chunk)-1);
-      int actual=stream->readBytes(chunk,toRead);
-      if (actual > 0) {
-        if (xml.length() + (size_t)actual < 16384) {
-          chunk[actual] = 0; xml += (char*)chunk;
-        }
-        bytesRead += actual; if(len>0) len-=actual;
-      }
-    }
-    if (bytesRead>16000) break;
-    delay(1);
-  }
-  http.end();
-  int itemStart=xml.indexOf("<item>"), added=0;
-  while (itemStart>=0 && added<5) {
-    int itemEnd=xml.indexOf("</item>",itemStart);
-    if (itemEnd<0) break;
-    String item=xml.substring(itemStart+6,itemEnd);
-    String title=xmlExtract(item,"title"), link=xmlExtract(item,"link");
-    if (link.isEmpty()) link=xmlExtract(item,"guid");
-    if (!title.isEmpty()) {
-      rssHeadlines.push_back({title,String(RSS_FEEDS[feedIdx].name),link});
-      while((int)rssHeadlines.size()>RSS_HEADLINE_MAX) rssHeadlines.erase(rssHeadlines.begin());
-      added++;
-    }
-    itemStart=xml.indexOf("<item>",itemEnd);
-  }
-  Serial.printf("[RSS] Done. Added %d headlines.\n", added);
-  return added>0;
-}
-
-void rssRebuildTicker() {
-  rssTickerStr = "  ";
-  for (auto& h : rssHeadlines) rssTickerStr += "["+h.source+"] "+h.title+"   ";
-  mainBuf.setFont(&fonts::Font2);
-  rssTickerW = mainBuf.textWidth(rssTickerStr.c_str());
-  rssTickerX = 0;
-}
-
-void rssFetchAll() {
-  rssFetching=true; rssHeadlines.clear();
-  for (int i=0;i<RSS_FEED_COUNT;i++) { rssFetchFeed(i); delay(200); }
-  rssRebuildTicker();
-  rssFetched=true; rssFetching=false; rssLastFetch=millis();
-  rssViewSel=0; rssScrollOff=0;
-}
-
-void rssTickerUpdate() {
-  if (!rssFetched||rssHeadlines.empty()||rssTickerStr.isEmpty()) return;
-  uint32_t now=millis();
-  if (now-rssTickerLast<RSS_TICKER_SPEED) return;
-  rssTickerLast=now; rssTickerX-=1;
-  if (rssTickerX < -rssTickerW) rssTickerX=SCR_W;
-}
-
-bool rssNeedsRefresh() {
-  uint32_t elapsed = millis() - rssLastFetch;
-  if (!rssFetched) return elapsed > 15000;
-  return elapsed > (uint32_t)(RSS_REFRESH_MIN*60000UL);
-}
 
 // ════════════════════════════════════════════════════════════════
 // FILE MANAGER STATE
@@ -907,7 +803,7 @@ static int menuSel = 0;
 static const char* menuItems[] = {
   "AI CHAT", "VIDEO", "TRIVIA",
   "FILE MANAGER", "WIFI", "SETTINGS", "POWER",
-  "BERITA RSS", "HACKER NEWS",
+  "HACKER NEWS",
   "DAD JOKE", "CHUCK NORRIS", "BORED",
   "STOIC QUOTE", "NUMBER FACT",
   "ISS TRACKER", "PEOPLE IN SPACE",
@@ -918,7 +814,7 @@ static const char* menuItems[] = {
 static const char* menuSubtitle[] = {
   "tanya Gemini & Groq", "putar .mjpeg SD", "quiz online",
   "browse & kelola SD", "scan & sambungkan", "brightness & info", "restart / sleep",
-  "baca berita RSS", "top 5 HackerNews",
+  "top 5 HackerNews",
   "lelucon bapak-bapak", "fakta Chuck Norris", "ide saat bosan",
   "kutipan bijak stoik", "fakta unik angka",
   "posisi ISS real-time", "astronaut di orbit",
@@ -926,7 +822,7 @@ static const char* menuSubtitle[] = {
   "IP Cam receiver",
   "9 mini games",
 };
-#define MENU_N 19
+#define MENU_N 18
 
 static uint32_t _barPulseT = 0;
 static uint8_t  _barAlpha  = 160;
@@ -1184,31 +1080,6 @@ void drawMenu() {
     mainBuf.setTextColor(C_DGRAY); mainBuf.setCursor(SCR_W-34,7); mainBuf.print("noWF");
   }
 
-  // RSS Ticker bawah
-  const int TICKER_H = 15;
-  const int TICKER_Y = SCR_H - TICKER_H;
-
-  if (rssFetched && !rssHeadlines.empty()) {
-    mainBuf.fillRect(0,TICKER_Y,SCR_W,TICKER_H,C_XXDGRAY);
-    mainBuf.drawFastHLine(0,TICKER_Y,SCR_W,C_DGRAY);
-    mainBuf.setFont(&fonts::Font2); mainBuf.setTextColor(C_DGRAY);
-    mainBuf.setCursor(2,TICKER_Y+3); mainBuf.print("RSS");
-    mainBuf.drawFastVLine(20,TICKER_Y+1,TICKER_H-2,C_DGRAY);
-    mainBuf.setClipRect(22,TICKER_Y,SCR_W-22,TICKER_H);
-    mainBuf.setTextColor(C_MGRAY);
-    mainBuf.setCursor(22+rssTickerX,TICKER_Y+3); mainBuf.print(rssTickerStr.c_str());
-    if(rssTickerX<0 && 22+rssTickerX+rssTickerW<SCR_W) {
-      mainBuf.setCursor(22+rssTickerX+rssTickerW,TICKER_Y+3); mainBuf.print(rssTickerStr.c_str());
-    }
-    mainBuf.clearClipRect();
-  } else if(wifiConnected) {
-    mainBuf.fillRect(0,TICKER_Y,SCR_W,TICKER_H,C_XXDGRAY);
-    mainBuf.drawFastHLine(0,TICKER_Y,SCR_W,C_DGRAY);
-    mainBuf.setFont(&fonts::Font2); mainBuf.setTextColor(C_DGRAY);
-    const char* rssMsg = rssFetching ? "RSS: mengambil..." : "RSS: belum ada";
-    mainBuf.setCursor(4,TICKER_Y+3); mainBuf.print(rssMsg);
-  }
-
   // Daftar Menu — SMOOTH ROUNDED
   const int VIS = 6;
   if(menuSel < menuScrollTop) menuScrollTop = menuSel;
@@ -1216,7 +1087,7 @@ void drawMenu() {
   menuScrollTop = constrain(menuScrollTop, 0, MENU_N - VIS);
 
   const int MENU_Y     = 23;
-  const int MENU_BOT   = TICKER_Y - 2;
+  const int MENU_BOT   = SCR_H - 2;
   const int MENU_H     = MENU_BOT - MENU_Y;
   const int ITEM_H_SEL = 30;
   const int ITEM_H_NRM = 16;
@@ -1370,7 +1241,7 @@ void camUpdate() {
           if (camBufPtr > 100) {
             camSprites[drawBufIdx]->fillScreen(C_BLACK);
             if(camJpeg.openRAM(mjpeg_buf, camBufPtr, camJpegDraw)) {
-              camJpeg.setPixelType(RGB565_BIG_ENDIAN);
+              camJpeg.setPixelType(RGB565_LITTLE_ENDIAN);
               camJpeg.decode(0,0,0);
               camJpeg.close();
             }
@@ -1735,83 +1606,9 @@ void drawFileManager() {
 }
 
 // ════════════════════════════════════════════════════════════════
-// RSS READER UI
 // ════════════════════════════════════════════════════════════════
-void drawRssReader() {
-  mainBuf.fillScreen(C_BG); uiHeader("BERITA RSS");
-  if(rssHeadlines.empty()){
-    if(rssFetching) uiCenteredText("Mengambil berita...",68,C_MGRAY,&fonts::Font2);
-    else if(!wifiConnected){ uiCenteredText("WiFi diperlukan",60,C_MGRAY,&fonts::Font2); uiCenteredText("Sambungkan WiFi dulu",78,C_DGRAY,&fonts::Font2); }
-    else { uiCenteredText("Tidak ada berita",68,C_MGRAY,&fonts::Font2); uiCenteredText("SEL untuk refresh",84,C_DGRAY,&fonts::Font2); }
-    uiFooter("SEL:refresh  L+R:back"); return;
-  }
-  mainBuf.setFont(&fonts::Font2); mainBuf.setTextColor(C_DGRAY);
-  char infoStr[40]; uint32_t minsAgo=(millis()-rssLastFetch)/60000;
-  snprintf(infoStr,sizeof(infoStr),"%d berita | %d mnt lalu",(int)rssHeadlines.size(),(int)minsAgo);
-  mainBuf.setCursor(4,28); mainBuf.print(infoStr);
-  mainBuf.drawFastHLine(0,37,SCR_W,C_DGRAY);
-
-  const int ITEM_H=27,LIST_Y=39;
-  int rss_listH=SCR_H-LIST_Y-16, rss_vis=rss_listH/ITEM_H;
-  if(rssViewSel<rssScrollOff) rssScrollOff=rssViewSel;
-  if(rssViewSel>=rssScrollOff+rss_vis) rssScrollOff=rssViewSel-rss_vis+1;
-
-  for(int i=0;i<rss_vis&&(i+rssScrollOff)<(int)rssHeadlines.size();i++){
-    int idx=i+rssScrollOff; RssHeadline& h=rssHeadlines[idx]; bool sel=(idx==rssViewSel);
-    int y=LIST_Y+i*ITEM_H;
-    if(sel){
-      mainBuf.fillRoundRect(0,y,SCR_W,ITEM_H,4,C_XDGRAY);
-      mainBuf.fillRoundRect(0,y+2,2,ITEM_H-4,2,C_WHITE);
-      mainBuf.drawRoundRect(0,y,SCR_W,ITEM_H,4,C_DGRAY);
-    }
-    mainBuf.setFont(&fonts::Font2);
-    mainBuf.setTextColor(sel?C_MGRAY:C_DGRAY); mainBuf.setCursor(6,y+3); mainBuf.print(h.source);
-    mainBuf.setTextColor(sel?C_WHITE:C_LGRAY);
-    String title=h.title;
-    while(title.length()>2&&mainBuf.textWidth((title+"...").c_str())>SCR_W-14) title.remove(title.length()-1);
-    if(h.title.length()>title.length()) title+="...";
-    mainBuf.setCursor(6,y+14); mainBuf.print(title);
-  }
-  uiFooter("UP/DW:scroll  SEL:refresh  L+R:back");
-}
 
 // ════════════════════════════════════════════════════════════════
-// TRIVIA
-// ════════════════════════════════════════════════════════════════
-static int _hexVal(char c){if(c>='0'&&c<='9')return c-'0';if(c>='A'&&c<='F')return c-'A'+10;if(c>='a'&&c<='f')return c-'a'+10;return 0;}
-String urlDecode(const String& s){
-  String o;o.reserve(s.length());
-  for(int i=0;i<(int)s.length();i++){char c=s[i];if(c=='%'&&i+2<(int)s.length()){o+=(char)((_hexVal(s[i+1])<<4)|_hexVal(s[i+2]));i+=2;}else if(c=='+')o+=' ';else o+=c;}
-  return o;
-}
-String decodeTrivia(const String& s){return htmlDecode(urlDecode(s));}
-
-void drawTriviaSetup(){
-  mainBuf.fillScreen(C_BG); uiHeader("TRIVIA SETUP");
-  const int ROW_Y[]={28,56,84,114},ROW_H=22;
-  char valCat[32],valAmt[8],valTime[12];
-  snprintf(valCat,sizeof(valCat),"%s",TRIVIA_CATS[triviaSetCatIdx].name);
-  snprintf(valAmt,sizeof(valAmt),"%d soal",TRIVIA_AMOUNTS[triviaSetAmtIdx]);
-  snprintf(valTime,sizeof(valTime),"%d detik",TRIVIA_TIMES[triviaSetTimeIdx]);
-  const char* LABELS[]={"Kategori","Jumlah Soal","Waktu/Soal",""};
-  const char* VALS[]={valCat,valAmt,valTime,""};
-  for(int r=0;r<3;r++){
-    bool sel=(triviaSetupRow==r); int y=ROW_Y[r];
-    mainBuf.fillRoundRect(4,y,SCR_W-8,ROW_H,5,sel?C_XDGRAY:C_BG);
-    mainBuf.drawRoundRect(4,y,SCR_W-8,ROW_H,5,sel?C_MGRAY:C_DGRAY);
-    mainBuf.setFont(&fonts::Font2);
-    mainBuf.setTextColor(sel?C_WHITE:C_LGRAY); mainBuf.setCursor(10,y+5); mainBuf.print(LABELS[r]);
-    String valStr=String("< ")+VALS[r]+" >";
-    if(mainBuf.textWidth(valStr.c_str())>160){String s=String(VALS[r]);if(s.length()>14)s=s.substring(0,13)+"~";valStr=String("< ")+s+" >";}
-    int tw2=mainBuf.textWidth(valStr.c_str());
-    mainBuf.setTextColor(sel?C_LGRAY:C_MGRAY); mainBuf.setCursor(SCR_W-tw2-8,y+5); mainBuf.print(valStr);
-  }
-  {
-    bool sel=(triviaSetupRow==3); int y=ROW_Y[3];
-    mainBuf.fillRoundRect(44,y,SCR_W-88,24,8,sel?C_WHITE:C_XDGRAY);
-    mainBuf.drawRoundRect(44,y,SCR_W-88,24,8,sel?C_WHITE:C_MGRAY);
-    mainBuf.setFont(&fonts::Font2); mainBuf.setTextColor(sel?C_BG:C_WHITE);
-    const char* lbl="MULAI QUIZ"; int tw2=mainBuf.textWidth(lbl);
     mainBuf.setCursor((SCR_W-tw2)/2,y+6); mainBuf.print(lbl);
   }
   uiFooter("UP/DW:baris  L/R:ubah  SEL:ok");
@@ -2635,7 +2432,6 @@ void drawHNComments() {
 // SETUP
 // ════════════════════════════════════════════════════════════════
 void setup() {
-  rssLastFetch = millis();
   Serial.begin(115200);
   delay(500);
   Serial.println("\n[BOOT] MediaHub v9.1");
@@ -2831,7 +2627,6 @@ void loop() {
   if(wifiConnected&&clockSynced&&millis()-lastNtpSync>NTP_SYNC_INTERVAL_MS)
     clockSyncNTP();
 
-  if(appState==ST_MENU) rssTickerUpdate();
 
   // Global back combo
   if(appState!=ST_MENU&&appState!=ST_SPLASH&&appState!=ST_POWER_MENU&&appState!=ST_CAMERA_STREAM) {
@@ -2906,67 +2701,62 @@ void loop() {
             appState=ST_SETTINGS; drawSettings(); pushFrame(); btnFlushAll(); break;
           case 6:
             appState=ST_POWER_MENU; powerSel=2; drawPowerMenu(); pushFrame(); btnFlushAll(); break;
-          case 7:
-            appState=ST_RSS_READER;
-            if(wifiConnected&&rssNeedsRefresh()&&!rssFetching) rssFetchAll();
-            drawRssReader(); pushFrame(); btnFlushAll(); break;
-          case 8: // HACKER NEWS
+          case 7: // HACKER NEWS
             if(!requireWifi("HACKER NEWS")) break;
             appState=ST_HACKER_NEWS; textScrollY=0;
             if(!hnFetched){ drawLoading("HACKER NEWS"); fetchHackerNews(); }
             drawHackerNews(); pushFrame(); btnFlushAll(); break;
-          case 9: // DAD JOKE
+          case 8: // DAD JOKE
             if(!requireWifi("DAD JOKE")) break;
             appState=ST_JOKES; jokeSource=0; textScrollY=0;
             if(!jokeFetched){ drawLoading("DAD JOKE"); pushFrame(); fetchJoke(); }
             drawJokes(); pushFrame(); btnFlushAll(); break;
-          case 10: // CHUCK NORRIS
+          case 9: // CHUCK NORRIS
             if(!requireWifi("CHUCK NORRIS")) break;
             appState=ST_JOKES; jokeSource=1; jokeFetched=false; textScrollY=0;
             drawLoading("CHUCK NORRIS"); pushFrame(); fetchJoke();
             drawJokes(); pushFrame(); btnFlushAll(); break;
-          case 11: // BORED
+          case 10: // BORED
             if(!requireWifi("AKTIVITAS")) break;
             appState=ST_BORED; textScrollY=0;
             if(!boredFetched){ drawLoading("AKTIVITAS ACAK"); pushFrame(); fetchBored(); }
             drawBored(); pushFrame(); btnFlushAll(); break;
-          case 12: // STOIC QUOTE
+          case 11: // STOIC QUOTE
             if(!requireWifi("STOIC QUOTE")) break;
             appState=ST_STOIC; textScrollY=0;
             if(!stoicFetched){ drawLoading("STOIC QUOTE"); pushFrame(); fetchStoic(); }
             drawStoic(); pushFrame(); btnFlushAll(); break;
-          case 13: // NUMBER FACT
+          case 12: // NUMBER FACT
             if(!requireWifi("NUMBER FACT")) break;
             appState=ST_NUMBER_FACT; textScrollY=0;
             if(!numFactFetched){ drawLoading("NUMBER FACT"); pushFrame(); fetchNumberFact(); }
             drawNumberFact(); pushFrame(); btnFlushAll(); break;
-          case 14: // ISS TRACKER
+          case 13: // ISS TRACKER
             if(!requireWifi("ISS TRACKER")) break;
             appState=ST_ISS_TRACKER;
             if(!issFetched){ drawLoading("ISS TRACKER"); fetchISSNow(); }
             drawISS(); pushFrame(); btnFlushAll(); break;
-          case 15: // PEOPLE IN SPACE
+          case 14: // PEOPLE IN SPACE
             if(!requireWifi("PEOPLE IN SPACE")) break;
             appState=ST_PEOPLE_SPACE;
             if(!astronautFetched){ drawLoading("PEOPLE IN SPACE"); fetchPeopleInSpace(); }
             drawPeopleInSpace(); pushFrame(); btnFlushAll(); break;
-          case 16: // APOD
+          case 15: // APOD
             if(!requireWifi("APOD NASA")) break;
             appState=ST_APOD;
             if(!apodFetched){ drawLoading("APOD NASA"); fetchAPOD(); }
             drawAPOD(); pushFrame(); btnFlushAll(); break;
-          case 17:
+          case 16:
             if(!requireWifi("CAMERA STREAM")) break;
             appState=ST_CAMERA_STREAM;
             if(!camInit()){ appState=ST_MENU; drawMenu(); pushFrame(); }
             btnFlushAll(); break;
-          case 18:
+          case 17:
             appState=ST_GAME_MENU; drawGameMenu(); pushFrame(); btnFlushAll(); break;
         }
         break;
       }
       if(appState==ST_MENU && millis()-_barPulseT>=18){ drawMenu(); pushFrame(); }
-      if(wifiConnected&&rssNeedsRefresh()&&!rssFetching) rssFetchAll();
       ledPulse(1500);
       break;
 
@@ -2998,7 +2788,6 @@ void loop() {
         if(ok){
           // [NEW v9.1] Simpan kredensial ke NVS
           wifiPrefsSave(wifiSSIDs[wifiSel].c_str(), wifiPassword);
-          clockSyncNTP(); rssLastFetch=millis();
         }
         drawWifiResult(ok,wifiSSIDs[wifiSel].c_str()); pushFrame(); btnFlushAll();
       }
@@ -3039,13 +2828,6 @@ void loop() {
         if(btnPressed(B_SEL)){FsEntry& e=fmEntries[fmSel];String fullPath=(fmCurrentPath.endsWith("/")?fmCurrentPath:fmCurrentPath+"/")+e.name;fmDeletePath(fullPath);fmConfirmDelete=false;fmScanDir(fmCurrentPath);if(fmSel>=(int)fmEntries.size())fmSel=max(0,(int)fmEntries.size()-1);drawFileManager();pushFrame();}
         if(btnPressed(B_L)){fmConfirmDelete=false;drawFileManager();pushFrame();}
       }
-      ledPulse(1200); break;
-
-    case ST_RSS_READER:
-      if(btnPressed(B_UP)){if(rssViewSel>0){rssViewSel--;drawRssReader();pushFrame();}}
-      if(btnPressed(B_DW)){if(rssViewSel<(int)rssHeadlines.size()-1){rssViewSel++;drawRssReader();pushFrame();}}
-      if(btnPressed(B_SEL)){if(wifiConnected){mainBuf.fillScreen(C_BG);uiHeader("BERITA RSS");uiCenteredText("Mengambil...",74,C_MGRAY,&fonts::Font2);pushFrame();rssFetchAll();rssViewSel=0;}drawRssReader();pushFrame();}
-      if(wifiConnected&&rssNeedsRefresh()&&!rssFetching){rssFetchAll();drawRssReader();pushFrame();}
       ledPulse(1200); break;
 
     case ST_TRIVIA_LOAD:
