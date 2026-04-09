@@ -168,6 +168,13 @@ void drawMinesweeper();
 void handleMinesweeper();
 void pacmanInit(); void drawPacman(); void handlePacman();
 void doodleInit(); void drawDoodle(); void handleDoodle();
+void drawTriviaSetup();
+void drawGameMenu();
+void memoInit(); void drawMemory(); void handleMemory();
+void simonInit(); void drawSimon(); void handleSimon();
+void sudoInit(); void drawSudoku(); void handleSudoku();
+void loadAiKeys();
+String decodeTrivia(String str);
 
 
 enum Btn { B_SEL=0, B_UP, B_DW, B_R, B_L };
@@ -1608,10 +1615,35 @@ void drawFileManager() {
 // ════════════════════════════════════════════════════════════════
 // ════════════════════════════════════════════════════════════════
 
-// ════════════════════════════════════════════════════════════════
+void drawTriviaSetup(){
+  mainBuf.fillScreen(C_BG); uiHeader("TRIVIA SETUP");
+  const char* labels[]={"Kategori","Jumlah","Waktu","MULAI GAME"};
+  for(int i=0;i<4;i++){
+    int y=36+i*28; bool sel=(i==triviaSetupRow);
+    uiCard(10,y,SCR_W-20,24,sel?C_WHITE:C_DGRAY,6);
+    mainBuf.setFont(&fonts::Font2); mainBuf.setTextColor(sel?C_WHITE:C_MGRAY);
+    mainBuf.setCursor(20,y+6); mainBuf.print(labels[i]);
+    char lbl[64]="";
+    if(i==0) strcpy(lbl, TRIVIA_CATS[triviaSetCatIdx].name);
+    else if(i==1) snprintf(lbl,sizeof(lbl),"%d Soal", TRIVIA_AMOUNTS[triviaSetAmtIdx]);
+    else if(i==2) snprintf(lbl,sizeof(lbl),"%d Detik", TRIVIA_TIMES[triviaSetTimeIdx]);
+    int tw2=mainBuf.textWidth(lbl);
+    mainBuf.setTextColor(sel?C_LGRAY:C_DGRAY);
     mainBuf.setCursor((SCR_W-tw2)/2,y+6); mainBuf.print(lbl);
   }
   uiFooter("UP/DW:baris  L/R:ubah  SEL:ok");
+}
+
+String decodeTrivia(String str) {
+  String res = "";
+  for (int i = 0; i < (int)str.length(); i++) {
+    if (str[i] == '%' && i + 2 < (int)str.length()) {
+      char c = (char)strtol(str.substring(i + 1, i + 3).c_str(), NULL, 16);
+      res += c; i += 2;
+    } else if (str[i] == '+') res += " ";
+    else res += str[i];
+  }
+  return res;
 }
 
 bool handleTriviaSetup(){
