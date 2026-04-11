@@ -358,6 +358,10 @@ static Preferences       prefs;
 // CAMERA STREAM STATE
 // ════════════════════════════════════════════════════════════════
 static const char* camStreamUrl = "http://192.168.4.1/stream";
+static const char* camCaptureUrl = "http://192.168.4.1/capture";
+static const char* camLedOnUrl = "http://192.168.4.1/led?state=on";
+static const char* camLedOffUrl = "http://192.168.4.1/led?state=off";
+static int camPhotoCount = 0;
 static LGFX_Sprite* camSprites[2] = {nullptr, nullptr};
 static uint8_t drawBufIdx = 0;
 static uint8_t showBufIdx = 1;
@@ -373,7 +377,9 @@ static bool     camInFrame = false;
 
 int camJpegDraw(JPEGDRAW *p) {
   if (!camSprites[drawBufIdx]) return 0;
-  camSprites[drawBufIdx]->pushImage(p->x, p->y, p->iWidth, p->iHeight, p->pPixels);
+  int cropT = 35;
+  if (p->y < cropT || p->y >= (240 - cropT)) return 1;
+  camSprites[drawBufIdx]->pushImage(p->x, p->y - cropT, p->iWidth, p->iHeight, p->pPixels);
   return 1;
 }
 static uint8_t  *mjpeg_buf  = nullptr;
@@ -1282,6 +1288,70 @@ void camUpdate() {
     }
   }
 }
+void camCapture() {
+  if (!SD.begin(SD_CS, sdSPI, SD_SPI_SPEED)) {
+    camSprites[drawBufIdx]->fillRect(0, SCR_H-20, SCR_W, 20, lgfx::color565(255,0,0));
+    camSprites[drawBufIdx]->setTextColor(lgfx::color565(255,255,255));
+    camSprites[drawBufIdx]->setCursor(10, SCR_H-15);
+    camSprites[drawBufIdx]->print("SD Card not ready!");
+    return;
+  }
+  Serial.println("[CAM] Capturing photo...");
+  camSprites[drawBufIdx]->fillRect(0, SCR_H-20, SCR_W, 20, lgfx::color565(0,0,255));
+  camSprites[drawBufIdx]->setTextColor(lgfx::color565(255,255,255));
+  camSprites[drawBufIdx]->setCursor(10, SCR_H-15);
+  camSprites[drawBufIdx]->print("Capturing...");
+  ledSet(255, 255, 255);
+  HTTPClient hCap;
+  WiFiClient cCap;
+  hCap.begin(cCap, camCaptureUrl);
+  hCap.setTimeout(5000);
+  int code = hCap.GET();
+  if (code == 200) {
+    int len = hCap.getSize();
+    if (len > 0) {
+      uint8_t* buf = (uint8_t*)heap_caps_malloc(len, MALLOC_CAP_8BIT | MALLOC_CAP_SPIRAM);
+      if (buf) {
+        WiFiClient* s = hCap.getStreamPtr();
+        int readLen = s->readBytes(buf, len);
+        if (readLen == len) {
+          camPhotoCount++;
+          char path[32];
+          snprintf(path, sizeof(path), "/photos/IMG_%04d.jpg", camPhotoCount);
+          File file = SD.open(path, FILE_WRITE);
+          if (file) {
+            file.write(buf, len);
+            file.close();
+            Serial.printf("[CAM] Saved: %s\n", path);
+            camSprites[drawBufIdx]->fillRect(0, SCR_H-20, SCR_W, 20, lgfx::color565(0,255,0));
+            camSprites[drawBufIdx]->setCursor(10, SCR_H-15);
+            camSprites[drawBufIdx]->printf("Saved: %s", path);
+          } else {
+            camSprites[drawBufIdx]->fillRect(0, SCR_H-20, SCR_W, 20, lgfx::color565(255,0,0));
+            camSprites[drawBufIdx]->setCursor(10, SCR_H-15);
+            camSprites[drawBufIdx]->print("SD Write failed!");
+          }
+        }
+        heap_caps_free(buf);
+      }
+    }
+  }
+  hCap.end();
+  ledSet(0, 0, 255);
+}
+
+void camLed(bool on) {
+  HTTPClient hLed;
+  WiFiClient cLed;
+  hLed.begin(cLed, on ? camLedOnUrl : camLedOffUrl);
+  hLed.GET();
+  hLed.end();
+  camSprites[drawBufIdx]->fillRect(0, SCR_H-20, SCR_W, 20, on ? lgfx::color565(255,255,0) : lgfx::color565(65,65,65));
+  camSprites[drawBufIdx]->setTextColor(on ? lgfx::color565(0,0,0) : lgfx::color565(255,255,255));
+  camSprites[drawBufIdx]->setCursor(10, SCR_H-15);
+  camSprites[drawBufIdx]->printf("LED %s", on ? "ON" : "OFF");
+}
+
 void scanWifi() {
   mainBuf.fillScreen(C_BG); uiHeader("WIFI SETUP");
   uiCenteredText("Scanning...",76,C_LGRAY,&fonts::Font2); pushFrame();
@@ -2502,6 +2572,13 @@ void setup() {
     drawSplash("SD OK...");
     if(!tryPlayBootMjpeg()) drawSplash("SD OK — scanning...");
     scanVideos(); fmScanDir("/");
+    if(!SD.exists("/photos")) SD.mkdir("/photos");
+    File pRoot = SD.open("/photos");
+    if(pRoot){
+      File pFile = pRoot.openNextFile();
+      while(pFile){ camPhotoCount++; pFile = pRoot.openNextFile(); }
+      pRoot.close();
+    }
     char msg[48]; snprintf(msg,sizeof(msg),"SD OK — %d video",(int)videoFiles.size());
     drawSplash(msg);
   } else {
@@ -2838,6 +2915,15 @@ void loop() {
 
     case ST_VIDEO_PLAY: break;
     case ST_CAMERA_STREAM:
+      if(btnPressed(B_SEL)) camCapture();
+      if(btnPressed(B_UP))  camLed(true);
+      if(btnPressed(B_DW))  camLed(false);
+      if(btnPressed(B_R)) {
+        camSprites[drawBufIdx]->fillRect(0, SCR_H-20, SCR_W, 20, lgfx::color565(0,0,128));
+        camSprites[drawBufIdx]->setTextColor(lgfx::color565(255,255,255));
+        camSprites[drawBufIdx]->setCursor(10, SCR_H-15);
+        camSprites[drawBufIdx]->printf("SD Photos: %d", camPhotoCount);
+      }
       camUpdate();
       if(btnComboLR()){
         camStop();
