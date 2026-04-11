@@ -359,8 +359,8 @@ static Preferences       prefs;
 // ════════════════════════════════════════════════════════════════
 static const char* camStreamUrl = "http://192.168.4.1/stream";
 static const char* camCaptureUrl = "http://192.168.4.1/capture";
-static const char* camLedUrl = "http://192.168.4.1/led?val=";
-static int camLedVal = 0;
+static const char* camLedUrl = "http://192.168.4.1/led?state=";
+static bool camLedOn = false;
 static int camPhotoCount = 0;
 static LGFX_Sprite* camSprites[2] = {nullptr, nullptr};
 static uint8_t drawBufIdx = 0;
@@ -1333,18 +1333,20 @@ void camCapture() {
   ledSet(0, 0, 255);
 }
 
-void camLed(int val) {
+void camLed(bool on) {
   HTTPClient hLed;
   WiFiClient cLed;
-  String url = String(camLedUrl) + String(val);
+  String url = String(camLedUrl) + (on ? "on" : "off");
   hLed.begin(cLed, url);
   hLed.GET();
   hLed.end();
-  uint16_t c = lgfx::color565(val, val, 0);
-  camSprites[drawBufIdx]->fillRect(0, SCR_H-20, SCR_W, 20, val>0 ? c : lgfx::color565(65,65,65));
-  camSprites[drawBufIdx]->setTextColor(val>128 ? lgfx::color565(0,0,0) : lgfx::color565(255,255,255));
+  camLedOn = on;
+  uint16_t bg = on ? lgfx::color565(255, 255, 0) : lgfx::color565(65, 65, 65);
+  uint16_t fg = on ? lgfx::color565(0, 0, 0) : lgfx::color565(255, 255, 255);
+  camSprites[drawBufIdx]->fillRect(0, SCR_H-20, SCR_W, 20, bg);
+  camSprites[drawBufIdx]->setTextColor(fg);
   camSprites[drawBufIdx]->setCursor(10, SCR_H-15);
-  camSprites[drawBufIdx]->printf("LED Intensity: %d%%", val*100/255);
+  camSprites[drawBufIdx]->printf("LED: %s", on ? "ON" : "OFF");
 }
 
 void scanWifi() {
@@ -2911,8 +2913,8 @@ void loop() {
     case ST_VIDEO_PLAY: break;
     case ST_CAMERA_STREAM:
       if(btnPressed(B_SEL)) camCapture();
-      if(btnPressed(B_UP)) { camLedVal = min(255, camLedVal + 32); camLed(camLedVal); }
-      if(btnPressed(B_DW)) { camLedVal = max(0, camLedVal - 32); camLed(camLedVal); }
+      if(btnPressed(B_UP)) camLed(true);
+      if(btnPressed(B_DW)) camLed(false);
       if(btnPressed(B_R)) {
         camSprites[drawBufIdx]->fillRect(0, SCR_H-20, SCR_W, 20, lgfx::color565(0,0,128));
         camSprites[drawBufIdx]->setTextColor(lgfx::color565(255,255,255));
