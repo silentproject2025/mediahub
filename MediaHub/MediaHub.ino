@@ -215,7 +215,7 @@ enum Btn { B_SEL=0, B_UP, B_DW, B_R, B_L };
 // WARNA
 // ════════════════════════════════════════════════════════════════
 static uint16_t C_BLACK, C_WHITE, C_LGRAY, C_MGRAY, C_DGRAY,
-                C_XDGRAY, C_XXDGRAY;
+                C_XDGRAY, C_XXDGRAY, C_RED, C_GREEN;
 static uint16_t C_BG, C_SURFACE, C_CARD, C_BORDER,
                 C_TEXT_DIM, C_TEXT_MUTE, C_TEXT_DEAD;
 static uint16_t C_ACCENT_SPACE, C_ACCENT_FUN, C_ACCENT_INFO,
@@ -229,6 +229,8 @@ void initColors() {
   C_DGRAY   = lgfx::color565(65,65,65);
   C_XDGRAY  = lgfx::color565(32,32,32);
   C_XXDGRAY = lgfx::color565(16,16,16);
+  C_RED     = lgfx::color565(255,0,0);
+  C_GREEN   = lgfx::color565(0,255,0);
 
   C_BG        = C_BLACK;
   C_SURFACE   = C_XDGRAY;
@@ -370,6 +372,8 @@ static uint32_t camFrameCount = 0;
 static uint32_t camFps = 0;
 static size_t   camBufPtr = 0;
 static bool     camInFrame = false;
+static bool     camCaptureReq   = false;
+static String   viewImagePath   = "";
 
 int camJpegDraw(JPEGDRAW *p) {
   if (!camSprites[drawBufIdx]) return 0;
@@ -410,13 +414,15 @@ enum AppState {
   ST_PEOPLE_SPACE,
   ST_HACKER_NEWS,
   ST_AI_MODE, ST_AI_CHAT_INPUT, ST_AI_CHAT_RES,
-  ST_HN_COMMENTS, ST_CAMERA_STREAM,
+  ST_HN_COMMENTS, ST_CAMERA_STREAM, ST_IMAGE_VIEW,
   ST_GAME_MENU, ST_TICTACTOE_MODE, ST_TICTACTOE, ST_TICTACTOE_OVER,
   ST_TANK_MODE, ST_TANK, ST_TANK_OVER,
   ST_FLAPPY_MODE, ST_FLAPPY, ST_FLAPPY_OVER,
   ST_MINESWEEPER_SIZE, ST_MINESWEEPER, ST_MINESWEEPER_OVER, ST_PACMAN_MODE, ST_PACMAN, ST_PACMAN_OVER, ST_DOODLE_MODE, ST_DOODLE, ST_DOODLE_OVER, ST_MEMORY_MODE, ST_MEMORY, ST_MEMORY_OVER, ST_SIMON_MODE, ST_SIMON, ST_SIMON_OVER, ST_SUDOKU_MODE, ST_SUDOKU, ST_SUDOKU_OVER
 };
 static AppState appState = ST_SPLASH;
+void saveCapture();
+void drawImageFile(String path);
 
 // ════════════════════════════════════════════════════════════════
 // CLOCK / NTP STATE
@@ -1253,6 +1259,16 @@ void camUpdate() {
               camJpeg.close();
             }
 
+            if(camCaptureReq) {
+              saveCapture();
+              camCaptureReq = false;
+              camSprites[drawBufIdx]->setTextColor(C_GREEN);
+              camSprites[drawBufIdx]->setFont(&fonts::Font2);
+              int tw = camSprites[drawBufIdx]->textWidth("CAPTURED");
+              camSprites[drawBufIdx]->setCursor((SCR_W-tw)/2, SCR_H/2-8);
+              camSprites[drawBufIdx]->print("CAPTURED");
+            }
+
             camFrameCount++;
             uint32_t now = millis();
             if(now - camLastFrameT >= 1000) {
@@ -1282,6 +1298,60 @@ void camUpdate() {
     }
   }
 }
+
+void saveCapture() {
+  if(!SD.exists("/captures")) SD.mkdir("/captures");
+  char path[64];
+  time_t now_t = time(NULL);
+  if(now_t < 1000000) snprintf(path, sizeof(path), "/captures/cam_%lu.jpg", (unsigned long)millis());
+  else snprintf(path, sizeof(path), "/captures/cam_%lu.jpg", (unsigned long)now_t);
+  File f = SD.open(path, FILE_WRITE);
+  if(f) {
+    f.write(mjpeg_buf, camBufPtr);
+    f.close();
+    Serial.printf("[CAM] Saved to %s (%u bytes)\n", path, (unsigned int)camBufPtr);
+  } else {
+    Serial.println("[CAM] Failed to open file for write");
+  }
+}
+
+int imgDrawCallback(JPEGDRAW *p) {
+  mainBuf.pushImage(p->x, p->y, p->iWidth, p->iHeight, p->pPixels);
+  return 1;
+}
+
+void drawImageFile(String path) {
+  mainBuf.fillScreen(C_BLACK);
+  File f = SD.open(path);
+  if(!f) {
+    uiCenteredText("File tidak ditemukan", SCR_H/2-8, C_RED, &fonts::Font2);
+    return;
+  }
+  size_t sz = f.size();
+  if(sz > MJPEG_BUF_SIZE) sz = MJPEG_BUF_SIZE;
+  f.read(mjpeg_buf, sz);
+  f.close();
+  JPEGDEC jd;
+  if(jd.openRAM(mjpeg_buf, sz, imgDrawCallback)) {
+    jd.setPixelType(RGB565_LITTLE_ENDIAN);
+    int iw = jd.getWidth();
+    int ih = jd.getHeight();
+    int ox = (SCR_W - iw) / 2;
+    int oy = (SCR_H - ih) / 2;
+    jd.decode(max(0,ox), max(0,oy), 0);
+    jd.close();
+  } else {
+    uiCenteredText("Gagal dekode JPEG", SCR_H/2-8, C_RED, &fonts::Font2);
+  }
+  mainBuf.fillRect(0, SCR_H-18, SCR_W, 18, lgfx::color565(40,40,40));
+  mainBuf.setFont(&fonts::Font2);
+  mainBuf.setTextColor(C_WHITE);
+  String nm = path.substring(path.lastIndexOf('/')+1);
+  if(nm.length()>40) nm = nm.substring(0,37)+"...";
+  mainBuf.setCursor(6, SCR_H-15);
+  mainBuf.print(nm);
+}
+
 void scanWifi() {
   mainBuf.fillScreen(C_BG); uiHeader("WIFI SETUP");
   uiCenteredText("Scanning...",76,C_LGRAY,&fonts::Font2); pushFrame();
@@ -2839,6 +2909,7 @@ void loop() {
     case ST_VIDEO_PLAY: break;
     case ST_CAMERA_STREAM:
       camUpdate();
+      if(btnPressed(B_SEL)) { camCaptureReq = true; ledPulse(300); }
       if(btnComboLR()){
         camStop();
         appState=ST_MENU; drawMenu(); pushFrame(); btnFlushAll();
@@ -2853,6 +2924,13 @@ void loop() {
           FsEntry& e=fmEntries[fmSel];
           if(e.name==".."){int lastSlash=fmCurrentPath.lastIndexOf('/');if(lastSlash>0)fmCurrentPath=fmCurrentPath.substring(0,lastSlash);else fmCurrentPath="/";fmScanDir(fmCurrentPath);drawFileManager();pushFrame();}
           else if(e.isDir){if(fmCurrentPath.endsWith("/"))fmCurrentPath+=e.name;else fmCurrentPath+="/"+e.name;fmScanDir(fmCurrentPath);drawFileManager();pushFrame();}
+          else {
+            String low = e.name; low.toLowerCase();
+            if(low.endsWith(".jpg") || low.endsWith(".jpeg")) {
+              viewImagePath = (fmCurrentPath.endsWith("/")?fmCurrentPath:fmCurrentPath+"/")+e.name;
+              appState = ST_IMAGE_VIEW; drawImageFile(viewImagePath); pushFrame(); btnFlushAll();
+            }
+          }
         }
         if(btnPressed(B_R)&&!fmEntries.empty()){if(fmEntries[fmSel].name!=".."){fmConfirmDelete=true;drawFileManager();pushFrame();}}
         if(btnPressed(B_L)){if(fmCurrentPath!="/"){int lastSlash=fmCurrentPath.lastIndexOf('/');if(lastSlash>0)fmCurrentPath=fmCurrentPath.substring(0,lastSlash);else fmCurrentPath="/";fmScanDir(fmCurrentPath);drawFileManager();pushFrame();}}
@@ -3026,6 +3104,12 @@ void loop() {
         drawHNComments(); pushFrame(); btnFlushAll();
       }
       ledPulse(1500); break;
+
+    case ST_IMAGE_VIEW:
+      if(btnPressed(B_SEL)||btnPressed(B_L)||btnPressed(B_R)||btnPressed(B_UP)||btnPressed(B_DW)) {
+        appState = ST_FILE_MGR; drawFileManager(); pushFrame(); btnFlushAll();
+      }
+      break;
 
     case ST_GAME_MENU:
       if(btnPressed(B_UP)){gameMenuSel=(gameMenuSel+8)%9; drawGameMenu(); pushFrame();}
