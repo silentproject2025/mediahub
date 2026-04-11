@@ -359,8 +359,8 @@ static Preferences       prefs;
 // ════════════════════════════════════════════════════════════════
 static const char* camStreamUrl = "http://192.168.4.1/stream";
 static const char* camCaptureUrl = "http://192.168.4.1/capture";
-static const char* camLedOnUrl = "http://192.168.4.1/led?state=on";
-static const char* camLedOffUrl = "http://192.168.4.1/led?state=off";
+static const char* camLedUrl = "http://192.168.4.1/led?val=";
+static int camLedVal = 0;
 static int camPhotoCount = 0;
 static LGFX_Sprite* camSprites[2] = {nullptr, nullptr};
 static uint8_t drawBufIdx = 0;
@@ -1289,13 +1289,6 @@ void camUpdate() {
   }
 }
 void camCapture() {
-  if (!SD.begin(SD_CS, sdSPI, SD_SPI_SPEED)) {
-    camSprites[drawBufIdx]->fillRect(0, SCR_H-20, SCR_W, 20, lgfx::color565(255,0,0));
-    camSprites[drawBufIdx]->setTextColor(lgfx::color565(255,255,255));
-    camSprites[drawBufIdx]->setCursor(10, SCR_H-15);
-    camSprites[drawBufIdx]->print("SD Card not ready!");
-    return;
-  }
   Serial.println("[CAM] Capturing photo...");
   camSprites[drawBufIdx]->fillRect(0, SCR_H-20, SCR_W, 20, lgfx::color565(0,0,255));
   camSprites[drawBufIdx]->setTextColor(lgfx::color565(255,255,255));
@@ -1340,16 +1333,18 @@ void camCapture() {
   ledSet(0, 0, 255);
 }
 
-void camLed(bool on) {
+void camLed(int val) {
   HTTPClient hLed;
   WiFiClient cLed;
-  hLed.begin(cLed, on ? camLedOnUrl : camLedOffUrl);
+  String url = String(camLedUrl) + String(val);
+  hLed.begin(cLed, url);
   hLed.GET();
   hLed.end();
-  camSprites[drawBufIdx]->fillRect(0, SCR_H-20, SCR_W, 20, on ? lgfx::color565(255,255,0) : lgfx::color565(65,65,65));
-  camSprites[drawBufIdx]->setTextColor(on ? lgfx::color565(0,0,0) : lgfx::color565(255,255,255));
+  uint16_t c = lgfx::color565(val, val, 0);
+  camSprites[drawBufIdx]->fillRect(0, SCR_H-20, SCR_W, 20, val>0 ? c : lgfx::color565(65,65,65));
+  camSprites[drawBufIdx]->setTextColor(val>128 ? lgfx::color565(0,0,0) : lgfx::color565(255,255,255));
   camSprites[drawBufIdx]->setCursor(10, SCR_H-15);
-  camSprites[drawBufIdx]->printf("LED %s", on ? "ON" : "OFF");
+  camSprites[drawBufIdx]->printf("LED Intensity: %d%%", val*100/255);
 }
 
 void scanWifi() {
@@ -2916,8 +2911,8 @@ void loop() {
     case ST_VIDEO_PLAY: break;
     case ST_CAMERA_STREAM:
       if(btnPressed(B_SEL)) camCapture();
-      if(btnPressed(B_UP))  camLed(true);
-      if(btnPressed(B_DW))  camLed(false);
+      if(btnPressed(B_UP)) { camLedVal = min(255, camLedVal + 32); camLed(camLedVal); }
+      if(btnPressed(B_DW)) { camLedVal = max(0, camLedVal - 32); camLed(camLedVal); }
       if(btnPressed(B_R)) {
         camSprites[drawBufIdx]->fillRect(0, SCR_H-20, SCR_W, 20, lgfx::color565(0,0,128));
         camSprites[drawBufIdx]->setTextColor(lgfx::color565(255,255,255));
