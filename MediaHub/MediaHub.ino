@@ -3817,10 +3817,10 @@ void pacmanInit() {
       if(pacMap[y][x] == 0) { pacMap[y][x] = 2; pacDots++; }
     }
   }
-  pacPlayer = {10.5f, 7.5f, 0, 0, 0};
+  pacPlayer = {10.5f, 9.5f, 0, 0, 0};
   ghosts[0] = {1.5f, 1.5f, 0, 0, 1};
   ghosts[1] = {19.5f, 1.5f, 0, 0, 2};
-  ghosts[2] = {10.5f, 1.5f, 0, 0, 3};
+  ghosts[2] = {10.5f, 3.5f, 0, 0, 3};
   pacScore = 0; pacGameOver = false;
   prefs.begin("games", true); pacHi = prefs.getInt("pac_hi", 0); prefs.end();
 }
@@ -3882,7 +3882,11 @@ void handlePacman() {
   if(btnHeld(B_R))  { pacPlayer.dx=0.15f; pacPlayer.dy=0; }
 
   pacPlayer.x += pacPlayer.dx; pacPlayer.y += pacPlayer.dy;
-  if(pacMap[(int)pacPlayer.y][(int)pacPlayer.x] == 1) { pacPlayer.x = lastX; pacPlayer.y = lastY; }
+  float pr = 0.35f;
+  if(pacMap[(int)(pacPlayer.y-pr)][(int)(pacPlayer.x-pr)] == 1 || pacMap[(int)(pacPlayer.y-pr)][(int)(pacPlayer.x+pr)] == 1 ||
+     pacMap[(int)(pacPlayer.y+pr)][(int)(pacPlayer.x-pr)] == 1 || pacMap[(int)(pacPlayer.y+pr)][(int)(pacPlayer.x+pr)] == 1) {
+    pacPlayer.x = lastX; pacPlayer.y = lastY;
+  }
 
   // Wrap around
   if(pacPlayer.x < 0) pacPlayer.x = 20.9f;
@@ -3891,22 +3895,36 @@ void handlePacman() {
   if(pacMap[(int)pacPlayer.y][(int)pacPlayer.x] == 2) {
     pacMap[(int)pacPlayer.y][(int)pacPlayer.x] = 0; pacScore += 10; pacDots--;
     ledSet(0, 50, 0); ledPulse(50);
-    if(pacDots <= 0) pacmanInit(); // Next level / Reset
+    if(pacDots <= 0) pacmanInit();
   }
 
-  // Ghost AI (Simple toward player)
+  // Ghost AI
   for(int i=0; i<3; i++) {
     float glastX = ghosts[i].x, glastY = ghosts[i].y;
-    if(random(100) < 5) { // Change direction occasionally
-       if(abs(pacPlayer.x - ghosts[i].x) > abs(pacPlayer.y - ghosts[i].y)) {
-         ghosts[i].dx = (pacPlayer.x > ghosts[i].x) ? 0.1f : -0.1f; ghosts[i].dy = 0;
-       } else {
-         ghosts[i].dy = (pacPlayer.y > ghosts[i].y) ? 0.1f : -0.1f; ghosts[i].dx = 0;
-       }
-    }
     ghosts[i].x += ghosts[i].dx; ghosts[i].y += ghosts[i].dy;
-    if(pacMap[(int)ghosts[i].y][(int)ghosts[i].x] == 1) { ghosts[i].x = glastX; ghosts[i].y = glastY; ghosts[i].dx = -ghosts[i].dx; ghosts[i].dy = -ghosts[i].dy; }
+    bool hit = false;
+    if(pacMap[(int)(ghosts[i].y-pr)][(int)(ghosts[i].x-pr)] == 1 || pacMap[(int)(ghosts[i].y-pr)][(int)(ghosts[i].x+pr)] == 1 ||
+       pacMap[(int)(ghosts[i].y+pr)][(int)(ghosts[i].x-pr)] == 1 || pacMap[(int)(ghosts[i].y+pr)][(int)(ghosts[i].x+pr)] == 1) {
+      hit = true;
+    }
 
+    if(hit || random(100) < 5) {
+      ghosts[i].x = glastX; ghosts[i].y = glastY;
+      int8_t dirs[4][2] = {{0,-1}, {0,1}, {-1,0}, {1,0}};
+      int8_t valid[4], count=0;
+      for(int d=0; d<4; d++) {
+        float nx = ghosts[i].x + dirs[d][0]*0.1f;
+        float ny = ghosts[i].y + dirs[d][1]*0.1f;
+        if(pacMap[(int)(ny-pr)][(int)(nx-pr)] != 1 && pacMap[(int)(ny-pr)][(int)(nx+pr)] != 1 &&
+           pacMap[(int)(ny+pr)][(int)(nx-pr)] != 1 && pacMap[(int)(ny+pr)][(int)(nx+pr)] != 1) {
+          valid[count++] = d;
+        }
+      }
+      if(count > 0) {
+        int8_t choice = valid[random(count)];
+        ghosts[i].dx = dirs[choice][0]*0.1f; ghosts[i].dy = dirs[choice][1]*0.1f;
+      }
+    }
     if(sqrt(pow(pacPlayer.x-ghosts[i].x,2)+pow(pacPlayer.y-ghosts[i].y,2)) < 0.6f) { pacGameOver = true; ledSet(255,0,0); ledPulse(500); }
   }
 
@@ -4006,6 +4024,7 @@ void handleDoodle() {
 // MEMORY MATCH
 static int memoGrid[18];
 static bool memoRevealed[18];
+static bool memoMatched[18];
 static int memoSelX = 0, memoSelY = 0;
 static int memoFirstIdx = -1, memoSecondIdx = -1;
 static uint32_t memoWaitT = 0;
@@ -4016,7 +4035,7 @@ void memoInit() {
   std::vector<int> cards;
   for(int i=0; i<9; i++) { cards.push_back(i); cards.push_back(i); }
   std::random_shuffle(cards.begin(), cards.end());
-  for(int i=0; i<18; i++) { memoGrid[i] = cards[i]; memoRevealed[i] = false; }
+  for(int i=0; i<18; i++) { memoGrid[i] = cards[i]; memoRevealed[i] = false; memoMatched[i] = false; }
   memoSelX = 0; memoSelY = 0; memoFirstIdx = -1; memoSecondIdx = -1;
   memoWaitT = 0; memoMatches = 0; memoGameOver = false;
 }
@@ -4028,6 +4047,7 @@ void drawMemory() {
   const int OFF_Y = 25;
 
   for(int i=0; i<18; i++) {
+    if(memoMatched[i]) continue;
     int x = i % 6, y = i / 6;
     int tx = OFF_X + x*(CW+GAP), ty = OFF_Y + y*(CH+GAP);
     bool sel = (x == memoSelX && y == memoSelY);
@@ -4056,6 +4076,7 @@ void handleMemory() {
     if(memoGrid[memoFirstIdx] != memoGrid[memoSecondIdx]) {
       memoRevealed[memoFirstIdx] = memoRevealed[memoSecondIdx] = false;
     } else {
+      memoMatched[memoFirstIdx] = memoMatched[memoSecondIdx] = true;
       memoMatches++;
       if(memoMatches == 9) memoGameOver = true;
     }
@@ -4073,7 +4094,7 @@ void handleMemory() {
 
   if(btnPressed(B_SEL)) {
     int idx = memoSelY * 6 + memoSelX;
-    if(!memoRevealed[idx] && idx != memoFirstIdx) {
+    if(!memoRevealed[idx] && !memoMatched[idx] && idx != memoFirstIdx) {
       if(memoFirstIdx == -1) memoFirstIdx = idx;
       else {
         memoSecondIdx = idx;
